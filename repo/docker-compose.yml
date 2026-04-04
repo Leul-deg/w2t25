@@ -1,16 +1,13 @@
-version: "3.9"
-
 services:
   postgres:
     image: postgres:16
-    container_name: meridian-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: meridian
       POSTGRES_PASSWORD: meridian
       POSTGRES_DB: meridian
     ports:
-      - "5432:5432"
+      - "55432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
