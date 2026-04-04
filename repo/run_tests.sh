@@ -23,7 +23,7 @@ run_backend_tests() {
       -v "$ROOT_DIR:/workspace" \
       -w /workspace/backend \
       "$RUST_IMAGE" \
-      bash -lc "cargo test"
+      bash -lc "export PATH=/usr/local/cargo/bin:/root/.cargo/bin:\$PATH; cargo test"
   fi
 }
 
@@ -38,7 +38,7 @@ run_frontend_check() {
       -v "$ROOT_DIR:/workspace" \
       -w /workspace/frontend \
       "$RUST_IMAGE" \
-      bash -lc "rustup target add wasm32-unknown-unknown >/dev/null 2>&1 && cargo check --target wasm32-unknown-unknown"
+      bash -lc "export PATH=/usr/local/cargo/bin:/root/.cargo/bin:\$PATH; rustup target add wasm32-unknown-unknown >/dev/null 2>&1 && cargo check --target wasm32-unknown-unknown"
   fi
 }
 
