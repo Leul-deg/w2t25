@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "backend",
+    # frontend is excluded from the workspace because it targets wasm32-unknown-unknown.
+    # Build with: cd frontend && trunk serve --port 8081
+]
+resolver = "2"

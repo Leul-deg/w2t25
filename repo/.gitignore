@@ -1,0 +1,26 @@
+# Rust build artifacts
+target/
+Cargo.lock
+
+# Environment files (never commit real secrets)
+.env
+backend/.env
+frontend/.env
+
+# Frontend WASM build output
+frontend/dist/
+frontend/pkg/
+
+# Exports and backups (runtime-generated)
+exports/*
+!exports/.gitkeep
+backups/*
+!backups/.gitkeep
+
+# macOS metadata
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp

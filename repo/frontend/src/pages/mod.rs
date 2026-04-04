@@ -1,0 +1,16 @@
+pub mod login;
+pub mod unauthorized;
+pub mod home;
+pub mod checkin;
+pub mod checkin_review;
+pub mod inbox;
+pub mod preferences;
+pub mod store;
+pub mod orders;
+pub mod admin_products;
+pub mod admin_orders;
+pub mod admin_config;
+pub mod admin_kpi;
+pub mod admin_reports;
+pub mod admin_backups;
+pub mod admin_logs;

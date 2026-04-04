@@ -1,0 +1,51 @@
+[package]
+name = "meridian-backend"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "meridian-backend"
+path = "src/main.rs"
+
+[dependencies]
+actix-web = "= 4.9.0"
+actix-session = { version = "0.9", features = ["cookie-session"] }
+actix-cors = "0.7"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full", "process"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+argon2 = "0.5"
+dotenv = "0.15"
+env_logger = "0.11"
+log = "0.4"
+thiserror = "1"
+anyhow = "1"
+rand = "0.8"
+aes-gcm = "0.10"
+sha2 = "0.10"
+
+# Pin transitive dependencies to versions compatible with rustc 1.85
+[dependencies.url]
+version = "= 2.4.1"
+
+[dependencies.idna]
+version = "= 0.4.0"
+
+[dependencies.time]
+version = "= 0.3.36"
+
+[dependencies.home]
+version = "= 0.5.9"
+
+[dependencies.actix-http]
+version = "= 3.11.2"
+
+[dev-dependencies]
+actix-web = { version = "= 4.9.0" }
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "macros"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
