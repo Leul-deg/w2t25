@@ -1,128 +1,71 @@
-# Meridian Project Questions
+Business Logic Questions Log:
 
-This file captures project questions, assumptions, and items that may need clarification later.
+Check-In Window Scope
+Question: The prompt did not specify if check-in windows should be district-wide, school-specific, class-specific, or all three depending on context.
+My Understanding: Windows are primarily school-scoped, with class linkage available where needed.
+Solution: Configured check-in windows to be primarily school-scoped, with options for class linkage where needed.
 
-## Assumptions Already Locked By Prompt
+Parent Submission Scope
+Question: The prompt did not clarify whether a parent can submit for multiple linked students within a single day and single UI view.
+My Understanding: Yes, but only for explicitly linked students.
+Solution: Enabled multi-student submission support within a single UI view for parents with explicitly linked students.
 
-- Frontend framework is `Yew`.
-- Backend framework is `Actix-web`.
-- Database is `PostgreSQL`.
-- Authentication is local-only.
-- Offline-first behavior is required.
-- Reporting, exports, backups, restore preparation, logging, and auditability are in scope.
+Order Payment Semantics
+Question: The prompt mentioned unpaid order auto-close after 30 minutes, but did not specify if this implies a future local payment status model, or if `pending` is enough.
+My Understanding: `pending` represents created-but-not-completed payment state for local/offline operation.
+Solution: Used `pending` as the state for created-but-not-completed payments to simplify local/offline operation context.
 
-## Likely Clarifications
+Inventory Reservation Timing
+Question: The prompt did not specify whether stock should be reserved at order creation or only after confirmation.
+My Understanding: Stock is decremented at order creation for operational simplicity in offline mode.
+Solution: Decremented stock at order creation to ensure operational simplicity when operating offline.
 
-### 1. Check-In Window Scope
+Admin Scope Rules
+Question: If an admin is campus- or district-scoped, the prompt did not specify if they should be able to manage only users/orders/products within those assigned scopes.
+My Understanding: Yes. Admin scope should constrain visible and mutable records where scope assignments exist.
+Solution: Implemented scope-based filtering to constrain visible and mutable records for admins based on their assigned campus or district scopes.
 
-Question:
+Report Scope
+Question: The prompt did not state whether report generation should be admin-only, or if academic staff should have limited reporting access later.
+My Understanding: Required to be Admin-only for now, since exports and console controls fall under administrator operations.
+Solution: Restricted report generation access strictly to admins.
 
-- Should check-in windows be district-wide, school-specific, class-specific, or all three depending on context?
+PII Masking Granularity
+Question: Beyond IDs and usernames, the prompt did not specify if all person-facing fields such as email, display name, and addresses should be masked in all exports.
+My Understanding: Any identifying data should be masked by default unless explicit `pii_export` permission overrides it.
+Solution: Applied default masking to all identifying data in exports, requiring explicit `pii_export` permission to override.
 
-Current assumption:
+Restore Execution Model
+Question: The prompt did not indicate whether the service should ever apply restore SQL automatically.
+My Understanding: No. Restore should remain a controlled manual action after the system prepares and verifies the restore artifact.
+Solution: Ensured that system restoration remains a controlled, manual process following artifact preparation and verification.
 
-- Windows are primarily school-scoped, with class linkage available where needed.
+Notifications
+Question: The prompt did not list if there are any notification types that should be treated as critical beyond security or system alerts.
+My Understanding: Only narrow alert/system events bypass DND and frequency deferral.
+Solution: Configured only narrow alert and system events to bypass Do Not Disturb (DND) and frequency deferrals.
 
-### 2. Parent Submission Scope
+Multi-Campus Product Scope
+Question: The prompt did not explain if products are global across the district or scoped to campus/school.
+My Understanding: Global by default unless later product scoping requirements are introduced.
+Solution: Treated products as global by default, with room for future scoping configurations if needed.
 
-Question:
+Restore Preparation for Delivery
+Question: The prompt did not specify if manual restore preparation is acceptable for delivery, or if a fully automated restore is required.
+My Understanding: Manual restore preparation is acceptable as a baseline for delivery.
+Solution: Prepared the system to support manual restore preparations for the initial delivery phase.
 
-- Can a parent submit for multiple linked students within a single day and single UI view?
+Admin Order Dashboard Real-Time Behavior
+Question: The prompt did not clarify if polling is acceptable for the admin order dashboard, or if websocket-style real-time behavior is required.
+My Understanding: Polling is acceptable for offline-first design constraints, rather than complex websocket setups.
+Solution: Implemented polling for the admin order dashboard to update order statuses.
 
-Current assumption:
+Sample Data Sufficiency
+Question: The prompt did not specify if current seeded roles and sample data are sufficient for local review.
+My Understanding: Current seeded roles and data provide an adequate representation for review.
+Solution: Provided seeded roles and sample data to facilitate local testing and review.
 
-- Yes, but only for explicitly linked students.
-
-### 3. Order Payment Semantics
-
-Question:
-
-- Does "unpaid order auto-close after 30 minutes" imply a future local payment status model, or is `pending` enough for now?
-
-Current assumption:
-
-- `pending` represents created-but-not-completed payment state for local/offline operation.
-
-### 4. Inventory Reservation Timing
-
-Question:
-
-- Should stock be reserved at order creation or only after confirmation?
-
-Current assumption:
-
-- Stock is decremented at order creation for operational simplicity in offline mode.
-
-### 5. Admin Scope Rules
-
-Question:
-
-- If an admin is campus- or district-scoped, should they be able to manage only users/orders/products within those assigned scopes?
-
-Current assumption:
-
-- Yes. Admin scope should constrain visible and mutable records where scope assignments exist.
-
-### 6. Report Scope
-
-Question:
-
-- Should report generation be admin-only, or should academic staff have limited reporting access later?
-
-Current assumption:
-
-- Admin-only for now, since the prompt describes exports and console controls under administrator operations.
-
-### 7. PII Masking Granularity
-
-Question:
-
-- Beyond IDs and usernames, should all person-facing fields such as email, display name, and addresses be masked in all exports?
-
-Current assumption:
-
-- Any identifying data should be masked by default unless explicit `pii_export` permission overrides it.
-
-### 8. Restore Execution Model
-
-Question:
-
-- Should the service ever apply restore SQL automatically?
-
-Current assumption:
-
-- No. Restore should remain a controlled manual action after the system prepares and verifies the restore artifact.
-
-### 9. Notifications
-
-Question:
-
-- Are there any notification types that should be treated as critical beyond security or system alerts?
-
-Current assumption:
-
-- Only narrow alert/system events bypass DND and frequency deferral.
-
-### 10. Multi-Campus Product Scope
-
-Question:
-
-- Are products global across the district or scoped to campus/school?
-
-Current assumption:
-
-- Global by default unless later product scoping requirements are introduced.
-
-## Review and Delivery Questions
-
-- Is manual restore preparation acceptable for delivery, or is a fully automated restore required?
-- Is polling acceptable for the admin order dashboard, or is websocket-style real-time behavior required?
-- Are current seeded roles and sample data sufficient for local review?
-- Should admin reporting, logs, and backups be linked directly from the home dashboard and nav for review friendliness?
-
-## Suggested Next Clarifications If Needed
-
-- exact scope rules for campus/district admins
-- product scoping rules
-- whether academic staff should gain limited reporting access
-- whether payment states need more detail than `pending`, `confirmed`, `fulfilled`, `cancelled`, and `refunded`
+Dashboard Navigation Links
+Question: The prompt did not ask whether admin reporting, logs, and backups should be linked directly from the home dashboard and nav for review friendliness.
+My Understanding: Direct links improve the review experience by making administrative operations easily accessible.
+Solution: Added direct links for reporting, logs, and backups to the home dashboard and navigation menu.
