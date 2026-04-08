@@ -22,22 +22,10 @@ Based on the progression from `delivery-acceptance-architecture-audit.md` throug
   - Original issue: the first audit reported incorrect methods/paths in the README.
   - How it was fixed: later audits confirmed the admin/config verification examples were aligned with the actual routes.
 
-- **Checked-in CI workflow**
-  - Original issue: earlier audits noted there was no checked-in CI workflow file.
-  - How it was fixed: later audits confirmed `.github/workflows/ci.yml` was added and invoked the project runner.
+- **Large parts of the test suite mirrored intended behavior**
+  - Original issue: the first audit reported that many top-level tests mirrored expected behavior instead of exercising production code.
+  - How it was fixed: later audits confirmed backend tests gained direct production-code reuse through `backend/src/lib.rs`, reducing some duplication and improving the rigor of parts of the suite.
 
-- **Checked-in runner coverage**
-  - Original issue: earlier audits flagged that the default runner only did backend `cargo test` and frontend compile checks.
-  - How it was fixed: later audits confirmed `run_tests.sh` was expanded to automate the ignored DB-backed suites, and then also to run frontend `cargo test`.
-
-- **Backend production-code reuse in tests**
-  - Original issue: earlier audits flagged heavy mirror-style testing.
-  - How it was fixed: later audits confirmed `backend/src/lib.rs` was added so test suites could import production modules directly.
-
-- **Frontend unit coverage**
-  - Original issue: earlier audits said frontend had no automated tests.
-  - How it was fixed: later audits confirmed inline frontend unit tests were added for route classification, admin helper behavior, dashboard routing, input normalization, and API-base construction.
-
-- **README checked-in runner numbering**
-  - Original issue: a later audit still noted a numbering typo in the runner section.
-  - How it was fixed: the latest audit no longer reported that issue.
+- **Admin dashboard card label/route mismatch**
+  - Original issue: the first audit reported inconsistent admin dashboard card labels and destinations.
+  - How it was fixed: later audits confirmed the admin homepage cards were realigned to their intended routes and descriptions.
