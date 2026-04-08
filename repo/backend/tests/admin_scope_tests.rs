@@ -11,6 +11,7 @@
 
 use std::env;
 use uuid::Uuid;
+use meridian_backend::middleware::auth::require_global_admin_scope;
 
 // ---------------------------------------------------------------------------
 // Helper: get test pool or skip
@@ -26,28 +27,19 @@ async fn test_pool() -> Option<sqlx::PgPool> {
 // ============================================================================
 
 mod scope_resolution {
-
-    /// An admin with `is_super_admin = true` and no scope rows → `None` (unrestricted).
     #[test]
     fn super_admin_flag_true_yields_none_scope() {
-        // Mirrors get_admin_campus_scope() returning None when is_super_admin = true.
         let scope: Option<Vec<uuid::Uuid>> = None;
         assert!(scope.is_none(), "super-admin scope must be None");
     }
 
-    /// An admin with `is_super_admin = false` and no scope rows → `Some([])` (zero access).
-    /// This is the scoped-by-default behaviour introduced in migration 015.
     #[test]
     fn no_flag_no_scope_rows_yields_empty_some() {
-        // Mirrors get_admin_campus_scope() returning Some(vec![]) when
-        // is_super_admin = false and admin_scope_assignments has no rows.
         let scope: Option<Vec<uuid::Uuid>> = Some(vec![]);
         assert!(scope.is_some(), "scoped-by-default must be Some(...)");
         assert!(scope.unwrap().is_empty(), "no assignments means empty campus list");
     }
 
-    /// An admin with scope rows must have Some(ids), even if the list is empty
-    /// after expansion (e.g., a district with no campuses yet).
     #[test]
     fn scope_rows_present_yields_some() {
         let campus_ids: Vec<uuid::Uuid> = vec![uuid::Uuid::new_v4()];
@@ -55,22 +47,16 @@ mod scope_resolution {
         assert!(scope.is_some());
     }
 
-    /// District expansion: each district row should contribute the campus IDs
-    /// belonging to that district.
     #[test]
     fn district_scope_expands_to_campus_ids() {
         let c1 = uuid::Uuid::new_v4();
         let c2 = uuid::Uuid::new_v4();
-        // Simulates two campuses returned for one district scope row.
-        let mut campus_ids: Vec<uuid::Uuid> = Vec::new();
-        campus_ids.push(c1);
-        campus_ids.push(c2);
+        let campus_ids = vec![c1, c2];
         assert_eq!(campus_ids.len(), 2);
         assert!(campus_ids.contains(&c1));
         assert!(campus_ids.contains(&c2));
     }
 
-    /// Campus scope row contributes exactly its own ID.
     #[test]
     fn campus_scope_row_contributes_one_id() {
         let campus = uuid::Uuid::new_v4();
@@ -79,16 +65,11 @@ mod scope_resolution {
         assert_eq!(campus_ids[0], campus);
     }
 
-    /// Multiple scope rows (mixed district + campus) accumulate all IDs.
     #[test]
     fn mixed_scope_rows_accumulate() {
         let campus_direct = uuid::Uuid::new_v4();
         let campus_from_district = uuid::Uuid::new_v4();
-        let mut ids = Vec::new();
-        // one campus row
-        ids.push(campus_direct);
-        // expansion of one district row → one campus
-        ids.push(campus_from_district);
+        let ids = vec![campus_direct, campus_from_district];
         assert_eq!(ids.len(), 2);
     }
 }

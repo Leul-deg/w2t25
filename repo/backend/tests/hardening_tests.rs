@@ -12,6 +12,11 @@
 
 use std::env;
 use uuid::Uuid;
+use meridian_backend::routes::reports::{parse_date, valid_report_type};
+use meridian_backend::services::backup::{decrypt_data, derive_key, encrypt_data};
+use meridian_backend::services::masking::{mask_email, mask_id, mask_username};
+use meridian_backend::services::reports::validate_date_range;
+use meridian_backend::services::scheduler::LOG_RETENTION_DAYS;
 
 // ---------------------------------------------------------------------------
 // Helper: get test pool or skip
@@ -28,71 +33,55 @@ async fn test_pool() -> Option<sqlx::PgPool> {
 
 mod report_range {
     use chrono::NaiveDate;
+    use meridian_backend::services::reports::validate_date_range;
 
     fn d(y: i32, m: u32, day: u32) -> NaiveDate {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
-    /// Validate that the date-range guardrail function is accessible.
-    /// (The actual function lives in services/reports.rs; tested there and here.)
-    fn validate_range(start: NaiveDate, end: NaiveDate) -> Result<(), String> {
-        if start > end {
-            return Err("start date must not be after end date".to_string());
-        }
-        let days = (end - start).num_days();
-        if days > 366 {
-            return Err(format!(
-                "range too large: {} days (max 366)",
-                days
-            ));
-        }
-        Ok(())
-    }
-
     #[test]
     fn single_day_range_accepted() {
-        assert!(validate_range(d(2026, 3, 1), d(2026, 3, 1)).is_ok());
+        assert!(validate_date_range(d(2026, 3, 1), d(2026, 3, 1)).is_ok());
     }
 
     #[test]
     fn full_month_march_accepted() {
-        assert!(validate_range(d(2026, 3, 1), d(2026, 3, 31)).is_ok());
+        assert!(validate_date_range(d(2026, 3, 1), d(2026, 3, 31)).is_ok());
     }
 
     #[test]
     fn exactly_366_days_accepted() {
         // 2026-01-01 to 2026-12-31 = 364 days; we need exactly 366.
-        assert!(validate_range(d(2026, 1, 1), d(2026, 12, 31)).is_ok());
+        assert!(validate_date_range(d(2026, 1, 1), d(2026, 12, 31)).is_ok());
         // Jan 1 to Jan 2 next year is 366 days.
-        assert!(validate_range(d(2026, 1, 1), d(2027, 1, 1)).is_ok());
+        assert!(validate_date_range(d(2026, 1, 1), d(2027, 1, 1)).is_ok());
     }
 
     #[test]
     fn range_367_days_rejected() {
         // 2026-01-01 to 2027-01-03 = 367 days.
-        let result = validate_range(d(2026, 1, 1), d(2027, 1, 3));
+        let result = validate_date_range(d(2026, 1, 1), d(2027, 1, 3));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("too large"));
+        assert!(result.unwrap_err().to_string().contains("too large"));
     }
 
     #[test]
     fn range_one_year_plus_one_day_rejected() {
-        let result = validate_range(d(2025, 1, 1), d(2026, 1, 3));
+        let result = validate_date_range(d(2025, 1, 1), d(2026, 1, 3));
         assert!(result.is_err());
     }
 
     #[test]
     fn start_after_end_rejected() {
-        let result = validate_range(d(2026, 3, 31), d(2026, 3, 1));
+        let result = validate_date_range(d(2026, 3, 31), d(2026, 3, 1));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("after"));
+        assert!(result.unwrap_err().to_string().contains("after"));
     }
 
     #[test]
     fn invalid_range_error_message_is_useful() {
-        let result = validate_range(d(2026, 3, 31), d(2026, 3, 1));
-        let msg = result.unwrap_err();
-        // Error must be human-readable.
+        let result = validate_date_range(d(2026, 3, 31), d(2026, 3, 1));
+        let msg = result.unwrap_err().to_string();
         assert!(!msg.is_empty());
         assert!(msg.len() > 10);
     }
@@ -103,27 +92,7 @@ mod report_range {
 // ============================================================================
 
 mod pii_masking {
-
-    fn mask_id(id: &str) -> String {
-        let last4 = if id.len() >= 4 { &id[id.len() - 4..] } else { id };
-        format!("…{}", last4)
-    }
-
-    fn mask_email(email: &str) -> String {
-        if let Some(at_pos) = email.find('@') {
-            let local = &email[..at_pos];
-            let domain = &email[at_pos..];
-            let first = local.chars().next().unwrap_or('?');
-            format!("{}***{}", first, domain)
-        } else {
-            "***".to_string()
-        }
-    }
-
-    fn mask_username(username: &str) -> String {
-        let first = username.chars().next().unwrap_or('?');
-        format!("{}***", first)
-    }
+    use meridian_backend::services::masking::{mask_email, mask_id, mask_username};
 
     /// PII masking is ON by default.
     #[test]
@@ -367,13 +336,7 @@ mod backup_auth {
 // ============================================================================
 
 mod encryption {
-    use sha2::{Digest, Sha256};
-
-    fn derive_key(passphrase: &str) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(passphrase.as_bytes());
-        hasher.finalize().into()
-    }
+    use meridian_backend::services::backup::derive_key;
 
     #[test]
     fn key_derivation_produces_32_bytes() {
@@ -414,31 +377,30 @@ mod encryption {
 // ============================================================================
 
 mod retention {
+    use meridian_backend::services::scheduler::LOG_RETENTION_DAYS;
 
     #[test]
     fn retention_period_is_180_days() {
-        // Must match LOG_RETENTION_DAYS in services/scheduler.rs
-        let days = 180_i64;
-        assert_eq!(days, 180);
+        assert_eq!(LOG_RETENTION_DAYS, 180);
     }
 
     #[test]
     fn entries_older_than_retention_should_be_pruned() {
-        let retention_days = 180_i64;
+        let retention_days = LOG_RETENTION_DAYS;
         let entry_age_days = 200_i64;
         assert!(entry_age_days > retention_days, "200-day entry should be pruned");
     }
 
     #[test]
     fn entries_within_retention_should_be_kept() {
-        let retention_days = 180_i64;
+        let retention_days = LOG_RETENTION_DAYS;
         let entry_age_days = 30_i64;
         assert!(entry_age_days <= retention_days, "30-day entry should be kept");
     }
 
     #[test]
     fn boundary_entry_on_retention_day_kept() {
-        let retention_days = 180_i64;
+        let retention_days = LOG_RETENTION_DAYS;
         let entry_age_days = 180_i64;
         // The SQL uses strict < for cutoff, so an entry exactly at the boundary is kept.
         assert!(entry_age_days <= retention_days);
@@ -465,21 +427,18 @@ mod retention {
 // ============================================================================
 
 mod failure_paths {
+    use meridian_backend::routes::reports::{parse_date, valid_report_type};
+    use meridian_backend::services::backup::{decrypt_data, derive_key, encrypt_data};
 
     #[test]
     fn invalid_date_format_rejected() {
-        // Mirrors parse_date() in routes/reports.rs.
-        use chrono::NaiveDate;
-        assert!(NaiveDate::parse_from_str("03/01/2026", "%Y-%m-%d").is_err());
-        assert!(NaiveDate::parse_from_str("2026-13-01", "%Y-%m-%d").is_err());
-        assert!(NaiveDate::parse_from_str("not-a-date", "%Y-%m-%d").is_err());
+        assert!(parse_date("03/01/2026").is_err());
+        assert!(parse_date("2026-13-01").is_err());
+        assert!(parse_date("not-a-date").is_err());
     }
 
     #[test]
     fn unknown_report_type_rejected() {
-        fn valid_report_type(rt: &str) -> bool {
-            matches!(rt, "checkins" | "approvals" | "orders" | "kpi" | "operational")
-        }
         assert!(!valid_report_type("users"));
         assert!(!valid_report_type("sales"));
         assert!(!valid_report_type(""));
@@ -524,19 +483,21 @@ mod failure_paths {
 
     #[test]
     fn backup_with_tampered_file_fails_integrity_check() {
-        // The AEAD tag in AES-256-GCM will cause decryption to fail
-        // if any bit of the ciphertext is changed.
-        // Verified in services/backup.rs decrypt_tampered_ciphertext_fails test.
-        let tamper_detected = true; // behavioral contract
-        assert!(tamper_detected);
+        let key = derive_key("tamper_test_key");
+        let plaintext = b"backup-payload";
+        let mut encrypted = encrypt_data(plaintext, &key).expect("encrypt");
+        if let Some(last) = encrypted.last_mut() {
+            *last ^= 0xFF;
+        }
+        assert!(decrypt_data(&encrypted, &key).is_err());
     }
 
     #[test]
     fn restore_with_wrong_key_fails() {
-        // AES-256-GCM decryption with wrong key always fails.
-        // Verified in services/backup.rs decrypt_wrong_key_fails test.
-        let wrong_key_fails = true;
-        assert!(wrong_key_fails);
+        let key_ok = derive_key("correct_key");
+        let key_bad = derive_key("wrong_key");
+        let encrypted = encrypt_data(b"payload", &key_ok).expect("encrypt");
+        assert!(decrypt_data(&encrypted, &key_bad).is_err());
     }
 }
 

@@ -121,6 +121,7 @@ async fn list_config(
     auth: AuthContext,
 ) -> Result<HttpResponse, AppError> {
     auth.require_role("Administrator")?;
+    require_global_admin_scope(auth.0.user_id, pool.get_ref()).await?;
 
     let rows = sqlx::query_as::<_, ConfigValueRow>(
         "SELECT id, key, value, value_type, description, scope, created_at, updated_at
@@ -229,6 +230,7 @@ async fn config_history(
     auth: AuthContext,
 ) -> Result<HttpResponse, AppError> {
     auth.require_role("Administrator")?;
+    require_global_admin_scope(auth.0.user_id, pool.get_ref()).await?;
 
     let rows = sqlx::query_as::<_, ConfigHistoryRow>(
         "SELECT ch.id, ch.config_key, ch.old_value, ch.new_value,
@@ -255,6 +257,7 @@ async fn list_campaigns(
     auth: AuthContext,
 ) -> Result<HttpResponse, AppError> {
     auth.require_role("Administrator")?;
+    require_global_admin_scope(auth.0.user_id, pool.get_ref()).await?;
 
     let rows = sqlx::query_as::<_, CampaignRow>(
         "SELECT id, name, description, enabled, starts_at, ends_at, created_at, updated_at
@@ -415,7 +418,7 @@ async fn commerce_summary(
 // Validation helper
 // ---------------------------------------------------------------------------
 
-fn validate_config_value(value_type: &str, raw: &str) -> Result<(), AppError> {
+pub fn validate_config_value(value_type: &str, raw: &str) -> Result<(), AppError> {
     let trimmed = raw.trim();
     match value_type {
         "integer" => {

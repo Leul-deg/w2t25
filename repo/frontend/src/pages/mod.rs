@@ -14,3 +14,5 @@ pub mod admin_kpi;
 pub mod admin_reports;
 pub mod admin_backups;
 pub mod admin_logs;
+pub mod admin_users;
+pub mod admin_deletion_requests;

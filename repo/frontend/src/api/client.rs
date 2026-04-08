@@ -1,7 +1,22 @@
 use gloo_net::http::Request;
 use serde::{de::DeserializeOwned, Serialize};
 
-pub const API_BASE: &str = "http://localhost:8080/api/v1";
+pub fn build_api_base_for_host(host: &str) -> String {
+    format!("http://{}:8080/api/v1", host)
+}
+
+fn api_base() -> String {
+    if let Some(explicit) = option_env!("API_BASE_URL") {
+        return explicit.to_string();
+    }
+
+    let host = web_sys::window()
+        .and_then(|w| w.location().hostname().ok())
+        .filter(|h| !h.is_empty())
+        .unwrap_or_else(|| "localhost".to_string());
+
+    build_api_base_for_host(&host)
+}
 
 #[derive(Debug)]
 pub enum ApiError {
@@ -21,7 +36,7 @@ impl std::fmt::Display for ApiError {
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str, token: Option<&str>) -> Result<T, ApiError> {
-    let url = format!("{}{}", API_BASE, path);
+    let url = format!("{}{}", api_base(), path);
     let mut req = Request::get(&url);
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
@@ -47,7 +62,7 @@ pub async fn post<B: Serialize, T: DeserializeOwned>(
     body: &B,
     token: Option<&str>,
 ) -> Result<T, ApiError> {
-    let url = format!("{}{}", API_BASE, path);
+    let url = format!("{}{}", api_base(), path);
     let mut req = Request::post(&url).header("Content-Type", "application/json");
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
@@ -77,7 +92,7 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(
     body: &B,
     token: Option<&str>,
 ) -> Result<T, ApiError> {
-    let url = format!("{}{}", API_BASE, path);
+    let url = format!("{}{}", api_base(), path);
     let mut req = Request::patch(&url).header("Content-Type", "application/json");
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
@@ -103,7 +118,7 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(
 }
 
 pub async fn post_no_body(path: &str, token: Option<&str>) -> Result<(), ApiError> {
-    let url = format!("{}{}", API_BASE, path);
+    let url = format!("{}{}", api_base(), path);
     let mut req = Request::post(&url);
     if let Some(t) = token {
         req = req.header("Authorization", &format!("Bearer {}", t));
@@ -120,4 +135,25 @@ pub async fn post_no_body(path: &str, token: Option<&str>) -> Result<(), ApiErro
         });
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_api_base_for_host;
+
+    #[test]
+    fn builds_localhost_api_base() {
+        assert_eq!(
+            build_api_base_for_host("localhost"),
+            "http://localhost:8080/api/v1"
+        );
+    }
+
+    #[test]
+    fn builds_lan_ip_api_base() {
+        assert_eq!(
+            build_api_base_for_host("192.168.1.25"),
+            "http://192.168.1.25:8080/api/v1"
+        );
+    }
 }

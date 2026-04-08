@@ -148,6 +148,7 @@ pub async fn admin_list_products(
     auth: AuthContext,
 ) -> Result<HttpResponse, AppError> {
     auth.require_role("Administrator")?;
+    require_global_admin_scope(auth.0.user_id, pool.get_ref()).await?;
 
     let rows = sqlx::query_as::<_, ProductRow>(&format!(
         "{} ORDER BY p.created_at DESC",

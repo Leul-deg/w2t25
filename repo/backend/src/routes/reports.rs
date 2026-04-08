@@ -89,7 +89,7 @@ struct ReportJobRow {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_date(s: &str) -> Result<NaiveDate, AppError> {
+pub fn parse_date(s: &str) -> Result<NaiveDate, AppError> {
     NaiveDate::parse_from_str(s, "%Y-%m-%d").map_err(|_| {
         AppError::ValidationError(format!(
             "Invalid date '{}'. Expected YYYY-MM-DD (e.g. 2026-03-01).",
@@ -98,7 +98,7 @@ fn parse_date(s: &str) -> Result<NaiveDate, AppError> {
     })
 }
 
-fn valid_report_type(rt: &str) -> bool {
+pub fn valid_report_type(rt: &str) -> bool {
     matches!(rt, "checkins" | "approvals" | "orders" | "kpi" | "operational")
 }
 

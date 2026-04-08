@@ -1,5 +1,6 @@
 use actix_web::dev::ServiceRequest;
 use actix_web::{web, FromRequest, HttpRequest};
+use sqlx::Row;
 use std::future::Future;
 use std::pin::Pin;
 use uuid::Uuid;
@@ -164,7 +165,14 @@ pub async fn require_class_access(
     class_id: Uuid,
 ) -> Result<(), AppError> {
     if auth.is_admin() {
-        return Ok(());
+        let school_id: Uuid = sqlx::query_scalar(
+            "SELECT school_id FROM classes WHERE id = $1",
+        )
+        .bind(class_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("Class not found.".into()))?;
+        return require_school_access(auth, pool, school_id).await;
     }
     if !auth.is_teacher() {
         return Err(AppError::Forbidden(
@@ -214,15 +222,120 @@ pub async fn require_global_admin_scope(
     Ok(())
 }
 
+/// Returns the set of campus IDs the admin may manage.
+///
+/// `None`      => user is a super-admin and can access all campuses.
+/// `Some(ids)` => admin is restricted to those campus IDs.
+pub async fn get_admin_campus_scope(
+    pool: &crate::db::DbPool,
+    admin_id: Uuid,
+) -> Result<Option<Vec<Uuid>>, AppError> {
+    let is_super: bool = sqlx::query_scalar(
+        "SELECT is_super_admin FROM users WHERE id = $1",
+    )
+    .bind(admin_id)
+    .fetch_one(pool)
+    .await?;
+
+    if is_super {
+        return Ok(None);
+    }
+
+    let rows = sqlx::query(
+        "SELECT scope_type, scope_id FROM admin_scope_assignments WHERE admin_id = $1",
+    )
+    .bind(admin_id)
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(Some(vec![]));
+    }
+
+    let mut campus_ids = Vec::new();
+    for row in rows {
+        let scope_type: String = row.try_get("scope_type")?;
+        let scope_id: Uuid = row.try_get("scope_id")?;
+        match scope_type.as_str() {
+            "campus" => campus_ids.push(scope_id),
+            "district" => {
+                let ids: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM campuses WHERE district_id = $1",
+                )
+                .bind(scope_id)
+                .fetch_all(pool)
+                .await?;
+                campus_ids.extend(ids);
+            }
+            _ => {}
+        }
+    }
+
+    Ok(Some(campus_ids))
+}
+
+pub async fn require_order_in_admin_scope(
+    admin_id: Uuid,
+    pool: &crate::db::DbPool,
+    order_id: Uuid,
+) -> Result<(), AppError> {
+    let scope = get_admin_campus_scope(pool, admin_id).await?;
+    let campus_ids = match scope {
+        None => return Ok(()),
+        Some(ids) => ids,
+    };
+
+    let in_scope: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM orders o
+             JOIN user_school_assignments usa ON usa.user_id = o.user_id
+             JOIN schools s ON s.id = usa.school_id
+             WHERE o.id = $1 AND s.campus_id = ANY($2)
+         )",
+    )
+    .bind(order_id)
+    .bind(campus_ids.as_slice())
+    .fetch_one(pool)
+    .await?;
+
+    if !in_scope {
+        return Err(AppError::Forbidden(
+            "Order is outside your administrative scope.".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Verify that a user has access to the given school.
-/// Admins pass. Teachers/AcademicStaff must be in user_school_assignments.
+/// Super-admins pass. Scoped admins must have the school's campus in scope.
+/// Teachers/AcademicStaff must be in user_school_assignments.
 pub async fn require_school_access(
     auth: &AuthContext,
     pool: &crate::db::DbPool,
     school_id: Uuid,
 ) -> Result<(), AppError> {
     if auth.is_admin() {
-        return Ok(());
+        let scope = get_admin_campus_scope(pool, auth.0.user_id).await?;
+        let campus_ids = match scope {
+            None => return Ok(()),
+            Some(ids) => ids,
+        };
+
+        let campus_id: Uuid = sqlx::query_scalar(
+            "SELECT campus_id FROM schools WHERE id = $1",
+        )
+        .bind(school_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| AppError::NotFound("School not found.".into()))?;
+
+        if campus_ids.contains(&campus_id) {
+            return Ok(());
+        }
+        return Err(AppError::Forbidden(
+            "You are not assigned to this school.".into(),
+        ));
     }
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM user_school_assignments WHERE school_id = $1 AND user_id = $2",

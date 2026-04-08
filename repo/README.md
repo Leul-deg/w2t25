@@ -180,6 +180,10 @@ trunk serve --port 8081 --open
 ```
 
 The frontend expects the backend at `http://localhost:8080/api/v1`.
+By default the frontend derives the API host from the browser hostname and
+targets port `8080`, so opening the app from another machine on the same LAN
+will call `http://<that-hostname-or-ip>:8080/api/v1` unless `API_BASE_URL` was
+compiled in explicitly.
 
 ---
 
@@ -232,80 +236,9 @@ cargo test --test admin_scope_tests
 ### DB integration tests
 
 All DB-backed tests are tagged `#[ignore]` so the default `cargo test` run stays
-fast.  They require a live PostgreSQL database and are run in CI automatically
-(see `.github/workflows/ci.yml`).
-
-**Two databases** are needed locally because `schema_integrity_tests` drops and
-recreates the public schema; sharing a database with the seeded test suites would
-corrupt their data.
-
-```bash
-# Spin up a throwaway Postgres container (one-time)
-docker run --rm -d --name pg_test \
-  --network host \
-  -e POSTGRES_USER=meridian \
-  -e POSTGRES_PASSWORD=meridian \
-  -e POSTGRES_DB=meridian_seeded \
-  -e PGPORT=5433 \
-  postgres:16-alpine
-
-# Create the second (clean-slate) database
-docker exec pg_test psql -U meridian -d meridian_seeded \
-  -c "CREATE DATABASE meridian_integrity;"
-```
-
-#### 1. Schema-integrity tests (clean-slate, must run isolated)
-
-```bash
-cd backend
-TEST_DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_integrity?sslmode=disable" \
-  cargo test --test schema_integrity_tests -- --include-ignored --test-threads=1
-```
-
-`--test-threads=1` is required: `clean_migration_succeeds` drops the schema;
-parallel execution races with the other two tests in this suite.
-Use `127.0.0.1` explicitly — `localhost` may resolve to `::1` (IPv6).
-
-These tests verify:
-- All 15 migrations apply without error on a blank schema
-- All required tables and columns exist after migration
-- Login lockout: 5 failures → 30-minute lockout row persisted in `login_lockouts`
-- Lockout persists independently of the rolling attempt window
-- Check-in report SQL uses `COALESCE(cad.decision, 'pending')` (not the non-existent `cs.status`)
-
-#### 2. Apply migrations + seed to the seeded database
-
-```bash
-cd backend
-DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  sqlx migrate run --source ../migrations
-
-DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  cargo run --bin seed
-```
-
-#### 3. Seeded-DB test suites
-
-```bash
-cd backend
-
-# PII/permission/retention integrity
-TEST_DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  cargo test --test hardening_tests -- --include-ignored
-
-# Commerce: order creation, shipping fee, points, auto-close, config history
-# --test-threads=1 required: test_config_versioning mutates shipping_fee_cents
-TEST_DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  cargo test --test commerce_tests -- --include-ignored --test-threads=1
-
-# Admin scope: super-admin flag, scoped-by-default, campus isolation
-TEST_DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  cargo test --test admin_scope_tests -- --include-ignored
-
-# In-binary tests: check-in submission, filters (school_id, homeroom, date), decide
-DATABASE_URL="postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable" \
-  cargo test --bin meridian-backend -- --include-ignored
-```
+fast. The checked-in runner below now automates both the normal unit path and
+the ignored PostgreSQL-backed suites using the bundled Docker Compose database on
+host port `55432` by default.
 
 ### Frontend type-check
 
@@ -329,18 +262,34 @@ migrations 001–015 applied and seed data loaded.  Results:
 
 Note: `commerce_tests` requires `--test-threads=1` because `test_config_versioning`
 mutates `shipping_fee_cents` and restores it; concurrent execution races with
-`test_order_creation_happy_path`.  The CI workflow passes this flag.
+`test_order_creation_happy_path`. The checked-in runner and workflow should keep
+that flag enabled.
 
-### CI
+### Checked-in runner
 
-The full suite (unit + all DB tests) runs automatically on every push and pull
-request via GitHub Actions (`.github/workflows/ci.yml`).  The workflow:
-1. Runs unit tests without a database.
-2. Spins up a `postgres:16-alpine` service container.
-3. Creates two databases (`meridian_seeded`, `meridian_integrity`).
-4. Applies migrations and runs the seed binary against `meridian_seeded`.
-5. Runs each test suite in the order above, with the correct `TEST_DATABASE_URL` /
-   `DATABASE_URL` for each.
+The checked-in smoke runner is:
+
+```bash
+cd ..
+repo/run_tests.sh
+```
+
+It runs:
+
+1. `cargo test` for the backend
+2. ignored DB-backed backend suites after preparing `meridian_seeded` and `meridian_integrity`
+3. frontend `cargo test` and `cargo check --target wasm32-unknown-unknown`
+
+If host Rust tooling is missing, `repo/run_tests.sh` falls back to a Rust Docker
+image automatically.
+
+For explicit Docker-first execution:
+
+```bash
+cd repo
+POSTGRES_HOST_PORT=55432 docker compose up -d
+./run_tests.sh
+```
 
 ---
 
@@ -439,7 +388,7 @@ curl -s http://localhost:8080/api/v1/admin/orders \
 
 **Update order status (replace ORDER_ID):**
 ```bash
-curl -s -X PUT http://localhost:8080/api/v1/admin/orders/ORDER_ID/status \
+curl -s -X POST http://localhost:8080/api/v1/admin/orders/ORDER_ID/status \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"confirmed"}' | jq .
@@ -462,16 +411,16 @@ curl -s http://localhost:8080/api/v1/admin/kpi \
 
 **Update shipping fee (admin only):**
 ```bash
-curl -s -X PUT http://localhost:8080/api/v1/admin/config/shipping_fee_cents \
+curl -s -X POST http://localhost:8080/api/v1/admin/config/values/shipping_fee_cents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"value":"895","reason":"Carrier rate increase Q2"}' | jq .
-# Expected: updated config_value row
+# Expected: {"key":"shipping_fee_cents",...}
 ```
 
 **Toggle campaign (e.g. free_shipping):**
 ```bash
-curl -s -X PUT http://localhost:8080/api/v1/config/campaigns/free_shipping/status \
+curl -s -X POST http://localhost:8080/api/v1/admin/config/campaigns/free_shipping \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}' | jq .
@@ -510,13 +459,13 @@ curl -s -X POST http://localhost:8080/api/v1/reports \
 # (fails with 403 if user lacks pii_export permission)
 ```
 
-**Range > 12 months (should fail with 400):**
+**Range > 12 months (should fail with 422):**
 ```bash
 curl -o /dev/null -w "%{http_code}\n" -s -X POST http://localhost:8080/api/v1/reports \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"report_type":"orders","start_date":"2024-01-01","end_date":"2026-01-03","pii_masked":true}'
-# Expected: 400
+# Expected: 422
 ```
 
 **Non-admin report access (should fail with 403):**

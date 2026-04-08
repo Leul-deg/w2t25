@@ -1,0 +1,19 @@
+name: Meridian CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Docker Compose
+        run: docker compose version
+
+      - name: Run checked-in verification
+        working-directory: repo
+        run: ./run_tests.sh

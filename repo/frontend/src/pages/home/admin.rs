@@ -4,6 +4,20 @@ use yew_router::prelude::*;
 use crate::router::Route;
 use crate::state::AppStateContext;
 
+fn admin_dashboard_cards() -> Vec<(&'static str, &'static str, Route)> {
+    vec![
+        ("User Management", "Create, edit, and manage accounts across all roles.", Route::AdminUsers),
+        ("Check-In Review", "Review submissions and monitor check-in activity across schools.", Route::CheckinReview),
+        ("Products & Inventory", "Manage catalog items, stock levels, and low-stock thresholds.", Route::AdminProducts),
+        ("Orders Dashboard", "Monitor live order operations, detail, and status transitions.", Route::AdminOrders),
+        ("Configuration", "System settings, campaign toggles, and backup management.", Route::AdminConfig),
+        ("KPI Dashboard", "Review sales, average order value, repeat purchase rate, and metrics.", Route::AdminKpi),
+        ("Exports", "Generate CSV reports with masked or permission-controlled PII.", Route::AdminReports),
+        ("Backups", "Create encrypted backups and prepare validated restores.", Route::AdminBackups),
+        ("Logs", "Inspect audit, access, and error logs with retention controls.", Route::AdminLogs),
+    ]
+}
+
 #[function_component(AdminHome)]
 pub fn admin_home() -> Html {
     let state = use_context::<AppStateContext>().expect("AppState context not found");
@@ -21,43 +35,27 @@ pub fn admin_home() -> Html {
                 <p>{ "Full system access. Manage users, districts, check-ins, commerce, and reporting." }</p>
             </div>
             <div class="dashboard-grid">
-                <Link<Route> to={Route::AdminUsers} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "User Management" }</h3>
-                    <p>{ "Create, edit, and manage accounts across all roles." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::CheckinReview} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Check-In Windows" }</h3>
-                    <p>{ "Create and monitor check-in windows across all schools." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminProducts} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Commerce" }</h3>
-                    <p>{ "Manage products, inventory, and order fulfillment." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminOrders} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Reports" }</h3>
-                    <p>{ "Monitor the live order dashboard and order details." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminConfig} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Configuration" }</h3>
-                    <p>{ "System settings, campaign toggles, and backup management." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminKpi} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Audit Logs" }</h3>
-                    <p>{ "Review KPIs, operational metrics, and low-stock signals." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminReports} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Exports" }</h3>
-                    <p>{ "Generate CSV reports with masked or permission-controlled PII." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminBackups} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Backups" }</h3>
-                    <p>{ "Create encrypted backups and prepare validated restores." }</p>
-                </Link<Route>>
-                <Link<Route> to={Route::AdminLogs} classes="dashboard-card dashboard-card-link">
-                    <h3>{ "Logs" }</h3>
-                    <p>{ "Inspect audit, access, and error logs with retention controls." }</p>
-                </Link<Route>>
+                { for admin_dashboard_cards().into_iter().map(|(title, description, route)| html! {
+                    <Link<Route> to={route} classes="dashboard-card dashboard-card-link">
+                        <h3>{ title }</h3>
+                        <p>{ description }</p>
+                    </Link<Route>>
+                }) }
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::admin_dashboard_cards;
+    use crate::router::Route;
+
+    #[test]
+    fn admin_dashboard_cards_have_expected_routes() {
+        let cards = admin_dashboard_cards();
+        assert!(cards.iter().any(|(title, _, route)| *title == "User Management" && *route == Route::AdminUsers));
+        assert!(cards.iter().any(|(title, _, route)| *title == "Orders Dashboard" && *route == Route::AdminOrders));
+        assert!(cards.iter().any(|(title, _, route)| *title == "Exports" && *route == Route::AdminReports));
     }
 }

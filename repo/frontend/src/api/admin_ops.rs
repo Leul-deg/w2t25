@@ -115,6 +115,39 @@ pub struct ErrorLogRow {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct AdminUser {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    pub display_name: Option<String>,
+    pub account_state: String,
+    pub created_at: String,
+    pub roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SetUserStateRequest {
+    pub state: String,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DeletionRequestRow {
+    pub id: String,
+    pub user_id: String,
+    pub username: String,
+    pub email: String,
+    pub reason: Option<String>,
+    pub status: String,
+    pub requested_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RejectDeletionRequest {
+    pub reason: Option<String>,
+}
+
 pub async fn list_reports(token: &str) -> Result<Vec<ReportJob>, ApiError> {
     get("/reports", Some(token)).await
 }
@@ -163,4 +196,45 @@ pub async fn error_logs(token: &str) -> Result<LogListResponse<ErrorLogRow>, Api
 
 pub async fn prune_logs(token: &str) -> Result<serde_json::Value, ApiError> {
     post("/logs/prune", &serde_json::json!({}), Some(token)).await
+}
+
+pub async fn list_admin_users(token: &str) -> Result<Vec<AdminUser>, ApiError> {
+    get("/admin/users", Some(token)).await
+}
+
+pub async fn set_admin_user_state(
+    token: &str,
+    user_id: &str,
+    req: &SetUserStateRequest,
+) -> Result<serde_json::Value, ApiError> {
+    post(&format!("/admin/users/{}/set-state", user_id), req, Some(token)).await
+}
+
+pub async fn list_deletion_requests(token: &str) -> Result<Vec<DeletionRequestRow>, ApiError> {
+    get("/admin/deletion-requests", Some(token)).await
+}
+
+pub async fn approve_deletion_request(
+    token: &str,
+    request_id: &str,
+) -> Result<serde_json::Value, ApiError> {
+    post(
+        &format!("/admin/deletion-requests/{}/approve", request_id),
+        &serde_json::json!({}),
+        Some(token),
+    )
+    .await
+}
+
+pub async fn reject_deletion_request(
+    token: &str,
+    request_id: &str,
+    req: &RejectDeletionRequest,
+) -> Result<serde_json::Value, ApiError> {
+    post(
+        &format!("/admin/deletion-requests/{}/reject", request_id),
+        req,
+        Some(token),
+    )
+    .await
 }

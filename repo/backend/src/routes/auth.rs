@@ -3,6 +3,7 @@ use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use chrono::{Duration, Utc};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::db::DbPool;
@@ -298,9 +299,17 @@ async fn login(
     }
 
     // 9. Generate session token (64 hex chars = 32 random bytes)
-    let token = generate_token();
+    let session_secret = std::env::var("SESSION_SECRET").unwrap_or_else(|_| {
+        "local-dev-session-secret-fallback-64-chars-minimum-000000000000".to_string()
+    });
+    let token = generate_token(&session_secret);
     let session_id = Uuid::new_v4();
-    let expires_at = Utc::now() + Duration::hours(1);
+    let ttl_seconds = std::env::var("SESSION_MAX_AGE_SECONDS")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(3600)
+        .max(60);
+    let expires_at = Utc::now() + Duration::seconds(ttl_seconds);
     let user_agent = extract_user_agent(&req);
 
     sqlx::query(
@@ -519,9 +528,13 @@ async fn verify_password(
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn generate_token() -> String {
+fn generate_token(session_secret: &str) -> String {
     let bytes: [u8; 32] = rand::thread_rng().gen();
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.update(session_secret.as_bytes());
+    let digest = hasher.finalize();
+    digest.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 fn extract_ip(req: &HttpRequest) -> Option<String> {
@@ -636,6 +649,17 @@ mod tests {
         role: &str,
         state: &str,
     ) {
+        sqlx::query("DELETE FROM login_lockouts WHERE username = $1")
+            .bind(username)
+            .execute(pool)
+            .await
+            .expect("cleanup login_lockouts failed");
+        sqlx::query("DELETE FROM login_attempts WHERE username = $1")
+            .bind(username)
+            .execute(pool)
+            .await
+            .expect("cleanup login_attempts failed");
+
         let hash = crate::services::auth::hash_password(password).unwrap();
         sqlx::query(
             "INSERT INTO users (id, username, email, password_hash, account_state, created_at, updated_at)

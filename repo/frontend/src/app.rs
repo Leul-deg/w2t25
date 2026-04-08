@@ -20,7 +20,29 @@ use crate::pages::admin_kpi::AdminKpiPage;
 use crate::pages::admin_reports::AdminReportsPage;
 use crate::pages::admin_backups::AdminBackupsPage;
 use crate::pages::admin_logs::AdminLogsPage;
+use crate::pages::admin_users::AdminUsersPage;
+use crate::pages::admin_deletion_requests::AdminDeletionRequestsPage;
 use crate::api::auth;
+
+fn is_admin_route(route: &Route) -> bool {
+    matches!(
+        route,
+        Route::Admin
+            | Route::AdminUsers
+            | Route::AdminDeletionRequests
+            | Route::AdminProducts
+            | Route::AdminOrders
+            | Route::AdminConfig
+            | Route::AdminKpi
+            | Route::AdminReports
+            | Route::AdminBackups
+            | Route::AdminLogs
+    )
+}
+
+fn requires_auth(route: &Route) -> bool {
+    !matches!(route, Route::Login | Route::Unauthorized | Route::NotFound)
+}
 
 fn switch(route: Route) -> Html {
     match route {
@@ -76,6 +98,29 @@ fn switch(route: Route) -> Html {
         Route::Inbox => html! { <InboxPage /> },
         Route::Preferences => html! { <PreferencesPage /> },
         Route::Home | Route::NotFound => html! { <AuthGuard /> },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_admin_route, requires_auth};
+    use crate::router::Route;
+
+    #[test]
+    fn admin_routes_are_classified_correctly() {
+        assert!(is_admin_route(&Route::AdminUsers));
+        assert!(is_admin_route(&Route::AdminDeletionRequests));
+        assert!(is_admin_route(&Route::AdminReports));
+        assert!(!is_admin_route(&Route::Store));
+        assert!(!is_admin_route(&Route::Checkin));
+    }
+
+    #[test]
+    fn auth_requirements_are_classified_correctly() {
+        assert!(!requires_auth(&Route::Login));
+        assert!(!requires_auth(&Route::Unauthorized));
+        assert!(requires_auth(&Route::Store));
+        assert!(requires_auth(&Route::AdminLogs));
     }
 }
 
@@ -186,6 +231,8 @@ fn admin_shell(props: &AdminShellProps) -> Html {
     match props.route {
         Route::AdminProducts => html! { <AdminProductsPage /> },
         Route::AdminOrders   => html! { <AdminOrdersPage /> },
+        Route::AdminUsers    => html! { <AdminUsersPage /> },
+        Route::AdminDeletionRequests => html! { <AdminDeletionRequestsPage /> },
         Route::AdminConfig   => html! { <AdminConfigPage /> },
         Route::AdminKpi      => html! { <AdminKpiPage /> },
         Route::AdminReports  => html! { <AdminReportsPage /> },

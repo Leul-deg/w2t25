@@ -172,8 +172,9 @@ struct MyCheckinRow {
 
 /// GET /api/v1/check-ins/windows
 ///
-/// Admins see all windows. Everyone else is scoped to schools they are assigned
-/// to directly (user_school_assignments) or via class enrolment (students).
+/// Super-admins see all windows. Scoped admins only see windows in their campus
+/// scope. Other roles are scoped to their directly assigned schools or
+/// enrolment/parent links.
 async fn list_windows(
     pool: web::Data<DbPool>,
     auth: AuthContext,
@@ -187,16 +188,31 @@ async fn list_windows(
     ])?;
 
     let rows: Vec<CheckinWindowRow> = if auth.is_admin() {
-        sqlx::query_as::<_, CheckinWindowRow>(
-            "SELECT cw.id, cw.title, cw.description, cw.opens_at, cw.closes_at,
-                    cw.allow_late, cw.active, cw.school_id, s.name as school_name
-             FROM checkin_windows cw
-             JOIN schools s ON cw.school_id = s.id
-             ORDER BY cw.opens_at DESC
-             LIMIT 100",
-        )
-        .fetch_all(pool.get_ref())
-        .await?
+        let scope = crate::middleware::auth::get_admin_campus_scope(pool.get_ref(), auth.0.user_id).await?;
+        match scope {
+            None => sqlx::query_as::<_, CheckinWindowRow>(
+                "SELECT cw.id, cw.title, cw.description, cw.opens_at, cw.closes_at,
+                        cw.allow_late, cw.active, cw.school_id, s.name as school_name
+                 FROM checkin_windows cw
+                 JOIN schools s ON cw.school_id = s.id
+                 ORDER BY cw.opens_at DESC
+                 LIMIT 100",
+            )
+            .fetch_all(pool.get_ref())
+            .await?,
+            Some(campus_ids) => sqlx::query_as::<_, CheckinWindowRow>(
+                "SELECT cw.id, cw.title, cw.description, cw.opens_at, cw.closes_at,
+                        cw.allow_late, cw.active, cw.school_id, s.name as school_name
+                 FROM checkin_windows cw
+                 JOIN schools s ON cw.school_id = s.id
+                 WHERE s.campus_id = ANY($1)
+                 ORDER BY cw.opens_at DESC
+                 LIMIT 100",
+            )
+            .bind(campus_ids.as_slice())
+            .fetch_all(pool.get_ref())
+            .await?,
+        }
     } else {
         // Students: direct assignment OR class enrolment.
         // Parents:  direct assignment OR via any linked student's enrolment.
@@ -250,16 +266,14 @@ async fn get_window(
     .await?
     .ok_or_else(|| AppError::NotFound("Check-in window not found".into()))?;
 
-    if !auth.is_admin() {
-        let school_id = sqlx::query_scalar::<_, Uuid>(
-            "SELECT school_id FROM checkin_windows WHERE id = $1",
-        )
-        .bind(window_id)
-        .fetch_one(pool.get_ref())
-        .await?;
+    let school_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT school_id FROM checkin_windows WHERE id = $1",
+    )
+    .bind(window_id)
+    .fetch_one(pool.get_ref())
+    .await?;
 
-        require_checkin_view_access(&auth, pool.get_ref(), school_id).await?;
-    }
+    require_checkin_view_access(&auth, pool.get_ref(), school_id).await?;
 
     let with_status: CheckinWindowWithStatus = window.into();
     Ok(HttpResponse::Ok().json(with_status))
@@ -449,7 +463,8 @@ async fn submit_checkin(
 ///   `date_to`     – submitted_at <= YYYY-MM-DD (end of day UTC)
 ///   `decision`    – `pending` | `approved` | `rejected`
 ///
-/// Admin: unrestricted. Teacher / AcademicStaff: must be assigned to the school.
+/// Super-admin: unrestricted. Scoped admins / Teacher / AcademicStaff:
+/// must have access to the window's school.
 async fn list_submissions(
     pool: web::Data<DbPool>,
     auth: AuthContext,
@@ -468,9 +483,7 @@ async fn list_submissions(
     .await?
     .ok_or_else(|| AppError::NotFound("Check-in window not found".into()))?;
 
-    if !auth.is_admin() {
-        crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
-    }
+    crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
 
     // Parse optional date bounds.
     let parse_date = |s: &str| -> Result<NaiveDate, AppError> {
@@ -589,9 +602,7 @@ async fn list_window_homerooms(
     .await?
     .ok_or_else(|| AppError::NotFound("Check-in window not found".into()))?;
 
-    if !auth.is_admin() {
-        crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
-    }
+    crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
 
     let homerooms = sqlx::query_as::<_, HomeroomRow>(
         "SELECT id, name, grade_level
@@ -673,9 +684,7 @@ async fn decide_submission(
     .fetch_one(pool.get_ref())
     .await?;
 
-    if !auth.is_admin() {
-        crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
-    }
+    crate::middleware::auth::require_school_access(&auth, pool.get_ref(), school_id).await?;
 
     // Fetch existing decision row.
     #[derive(sqlx::FromRow)]
@@ -924,7 +933,7 @@ async fn require_student_school_access(
 }
 
 /// Unified view-access check used by list_windows and get_window.
-/// Admins pass unconditionally. Teachers/Staff use school assignment.
+/// Super-admins pass unconditionally. Scoped admins and Teachers/Staff use school assignment.
 /// Students and Parents use enrolment / parent link.
 async fn require_checkin_view_access(
     auth: &AuthContext,
@@ -932,7 +941,7 @@ async fn require_checkin_view_access(
     school_id: Uuid,
 ) -> Result<(), AppError> {
     if auth.is_admin() {
-        return Ok(());
+        return crate::middleware::auth::require_school_access(auth, pool, school_id).await;
     }
 
     let is_teacher_or_staff = auth.is_teacher()
@@ -2266,6 +2275,11 @@ mod tests {
 
         let admin_id =
             seed_user(&pool, &format!("sch_admin_{}", suffix), "Administrator").await;
+        sqlx::query("UPDATE users SET is_super_admin = true WHERE id = $1")
+            .bind(admin_id)
+            .execute(&pool)
+            .await
+            .expect("set super admin failed");
         let teacher_id =
             seed_user(&pool, &format!("sch_teacher_{}", suffix), "Teacher").await;
         let student_id =

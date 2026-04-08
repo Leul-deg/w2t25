@@ -11,10 +11,10 @@ use crate::db::DbPool;
 use crate::services::reports;
 
 /// How often the main tick runs (seconds).
-const TICK_INTERVAL_SECS: u64 = 60;
+pub const TICK_INTERVAL_SECS: u64 = 60;
 
 /// Pending orders older than this are auto-cancelled (seconds).
-const ORDER_EXPIRY_SECS: i64 = 30 * 60; // 30 minutes
+pub const ORDER_EXPIRY_SECS: i64 = 30 * 60; // 30 minutes
 
 /// Log retention period (days). Public so tests can reference the constant.
 pub const LOG_RETENTION_DAYS: i64 = 180;

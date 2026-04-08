@@ -1788,6 +1788,142 @@ mod tests {
         assert!(!ids.contains(&order_out.to_string()), "out-of-scope order must NOT appear");
     }
 
+    /// Scoped admins must not access the global product list; only super-admins may.
+    #[actix_web::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_scoped_admin_blocked_from_global_product_list() {
+        let pool = test_pool().await;
+        let s = Uuid::new_v4().to_string()[..8].to_string();
+
+        let campus = seed_campus(&pool, &format!("gp_{}", s)).await;
+        let scoped = seed_user(&pool, &format!("gp_scoped_{}", s), "Administrator").await;
+        assign_admin_to_campus(&pool, scoped, campus).await;
+
+        let supe = seed_user(&pool, &format!("gp_super_{}", s), "Administrator").await;
+        make_super_admin(&pool, supe).await;
+
+        let product_owner = seed_user(&pool, &format!("gp_student_{}", s), "Student").await;
+        let _order = seed_product_and_order(&pool, product_owner, &format!("gp_{}", s)).await;
+
+        let app = init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .configure(crate::routes::configure_routes),
+        )
+        .await;
+        let scoped_tok = login_as(&app, &format!("gp_scoped_{}", s)).await;
+        let super_tok = login_as(&app, &format!("gp_super_{}", s)).await;
+
+        let resp = call_service(
+            &app,
+            TestRequest::get()
+                .uri("/api/v1/admin/products")
+                .insert_header(("Authorization", format!("Bearer {}", scoped_tok)))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 403, "scoped admin must not read global product list");
+
+        let resp = call_service(
+            &app,
+            TestRequest::get()
+                .uri("/api/v1/admin/products")
+                .insert_header(("Authorization", format!("Bearer {}", super_tok)))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200, "super-admin must read global product list");
+    }
+
+    /// Scoped admins must not read global config, history, or campaign data.
+    #[actix_web::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_scoped_admin_blocked_from_global_config_reads() {
+        let pool = test_pool().await;
+        let s = Uuid::new_v4().to_string()[..8].to_string();
+
+        let campus = seed_campus(&pool, &format!("gc_{}", s)).await;
+        let scoped = seed_user(&pool, &format!("gc_scoped_{}", s), "Administrator").await;
+        assign_admin_to_campus(&pool, scoped, campus).await;
+
+        let app = init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .configure(crate::routes::configure_routes),
+        )
+        .await;
+        let token = login_as(&app, &format!("gc_scoped_{}", s)).await;
+
+        for path in [
+            "/api/v1/admin/config",
+            "/api/v1/admin/config/history",
+            "/api/v1/admin/config/campaigns",
+        ] {
+            let resp = call_service(
+                &app,
+                TestRequest::get()
+                    .uri(path)
+                    .insert_header(("Authorization", format!("Bearer {}", token)))
+                    .to_request(),
+            )
+            .await;
+            assert_eq!(resp.status(), 403, "scoped admin must be blocked for {}", path);
+        }
+    }
+
+    /// Scoped admins using the customer order-detail route must still be limited
+    /// to orders owned by users in scope.
+    #[actix_web::test]
+    #[ignore = "requires DATABASE_URL"]
+    async fn test_scoped_admin_forbidden_on_customer_order_detail_route() {
+        let pool = test_pool().await;
+        let s = Uuid::new_v4().to_string()[..8].to_string();
+
+        let campus_a = seed_campus(&pool, &format!("cod_a_{}", s)).await;
+        let campus_b = seed_campus(&pool, &format!("cod_b_{}", s)).await;
+        let school_a = seed_school(&pool, campus_a, &format!("cod_a_{}", s)).await;
+        let school_b = seed_school(&pool, campus_b, &format!("cod_b_{}", s)).await;
+
+        let scoped = seed_user(&pool, &format!("cod_admin_{}", s), "Administrator").await;
+        assign_admin_to_campus(&pool, scoped, campus_a).await;
+
+        let user_in = seed_user(&pool, &format!("cod_in_{}", s), "Student").await;
+        assign_user_to_school(&pool, user_in, school_a).await;
+        let order_in = seed_product_and_order(&pool, user_in, &format!("cod_in_{}", s)).await;
+
+        let user_out = seed_user(&pool, &format!("cod_out_{}", s), "Student").await;
+        assign_user_to_school(&pool, user_out, school_b).await;
+        let order_out = seed_product_and_order(&pool, user_out, &format!("cod_out_{}", s)).await;
+
+        let app = init_service(
+            App::new()
+                .app_data(web::Data::new(pool.clone()))
+                .configure(crate::routes::configure_routes),
+        )
+        .await;
+        let token = login_as(&app, &format!("cod_admin_{}", s)).await;
+
+        let resp = call_service(
+            &app,
+            TestRequest::get()
+                .uri(&format!("/api/v1/orders/{}", order_in))
+                .insert_header(("Authorization", format!("Bearer {}", token)))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 200, "scoped admin must access in-scope order detail");
+
+        let resp = call_service(
+            &app,
+            TestRequest::get()
+                .uri(&format!("/api/v1/orders/{}", order_out))
+                .insert_header(("Authorization", format!("Bearer {}", token)))
+                .to_request(),
+        )
+        .await;
+        assert_eq!(resp.status(), 403, "scoped admin must be blocked for out-of-scope order detail");
+    }
+
     // Keep the chrono import used above from triggering dead_code warnings.
     #[allow(dead_code)]
     fn _use_utc() -> chrono::DateTime<Utc> { Utc::now() }

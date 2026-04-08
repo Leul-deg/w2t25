@@ -29,6 +29,10 @@
 // TEST_DATABASE_URL and are #[ignore]d by default.
 
 use std::env;
+use meridian_backend::errors::AppError;
+use meridian_backend::routes::config_routes::validate_config_value;
+use meridian_backend::services::commerce::{apply_shipping_fee, calculate_points, calculate_total};
+use meridian_backend::services::scheduler::ORDER_EXPIRY_SECS;
 
 // ── Helper: get test pool or skip ────────────────────────────────────────────
 
@@ -40,11 +44,12 @@ async fn test_pool() -> Option<sqlx::PgPool> {
 // ── Pure unit tests (always run) ─────────────────────────────────────────────
 
 mod pure_unit_tests {
+    use super::{apply_shipping_fee, calculate_points, calculate_total, validate_config_value, AppError, ORDER_EXPIRY_SECS};
+
     /// Shipping fee config: default $6.95
     #[test]
     fn shipping_fee_default_695_cents() {
-        // Mirrors commerce::apply_shipping_fee
-        let fee = 695_i64.max(0);
+        let fee = apply_shipping_fee(695);
         assert_eq!(fee, 695);
     }
 
@@ -52,8 +57,7 @@ mod pure_unit_tests {
     #[test]
     fn points_rate_one_per_dollar() {
         let subtotal_cents = 2500_i64; // $25.00
-        let rate = 1_i64;
-        let points = (subtotal_cents / 100) * rate;
+        let points = calculate_points(subtotal_cents, 1);
         assert_eq!(points, 25);
     }
 
@@ -61,8 +65,7 @@ mod pure_unit_tests {
     #[test]
     fn points_fractional_truncated() {
         let subtotal_cents = 2599_i64; // $25.99
-        let rate = 1_i64;
-        let points = (subtotal_cents / 100) * rate;
+        let points = calculate_points(subtotal_cents, 1);
         assert_eq!(points, 25); // not 26
     }
 
@@ -70,16 +73,15 @@ mod pure_unit_tests {
     #[test]
     fn order_total_includes_shipping() {
         let subtotal = 1500_i64;
-        let shipping = 695_i64;
-        assert_eq!(subtotal + shipping, 2195);
+        let shipping = apply_shipping_fee(695);
+        assert_eq!(calculate_total(subtotal, shipping), 2195);
     }
 
     /// Zero-rate points gives zero points
     #[test]
     fn zero_points_rate() {
         let subtotal_cents = 10000_i64;
-        let rate = 0_i64;
-        assert_eq!((subtotal_cents / 100) * rate, 0);
+        assert_eq!(calculate_points(subtotal_cents, 0), 0);
     }
 
     /// Low-stock threshold: alert fires below 10 units
@@ -130,7 +132,7 @@ mod pure_unit_tests {
     #[test]
     fn not_found_error_message() {
         let id = uuid::Uuid::new_v4();
-        let msg = format!("Product {} not found", id);
+        let msg = AppError::NotFound(format!("Product {} not found", id)).to_string();
         assert!(msg.contains("not found"));
     }
 
@@ -146,17 +148,14 @@ mod pure_unit_tests {
     /// Config value validation: integer type
     #[test]
     fn config_integer_validation() {
-        let valid = "695";
-        let invalid = "six-ninety-five";
-        assert!(valid.parse::<i64>().is_ok());
-        assert!(invalid.parse::<i64>().is_err());
+        assert!(validate_config_value("integer", "695").is_ok());
+        assert!(validate_config_value("integer", "six-ninety-five").is_err());
     }
 
     /// Unpaid order auto-close: order older than 30 min should be cancelled
     #[test]
     fn order_expiry_window_is_30_minutes() {
-        let expiry_secs: i64 = 30 * 60;
-        assert_eq!(expiry_secs, 1800);
+        assert_eq!(ORDER_EXPIRY_SECS, 1800);
     }
 
     /// Admin-only: non-admin role check fails

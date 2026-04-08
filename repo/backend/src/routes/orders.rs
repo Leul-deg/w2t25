@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::db::DbPool;
 use crate::errors::AppError;
-use crate::middleware::auth::AuthContext;
+use crate::middleware::auth::{require_order_in_admin_scope, AuthContext};
 use crate::services::commerce;
 
 // ---------------------------------------------------------------------------
@@ -406,8 +406,13 @@ async fn get_my_order(
     let order_id = path.into_inner();
     let detail = fetch_order_detail(pool.get_ref(), order_id).await?;
 
-    // Non-admins may only see their own orders.
-    if detail.order.user_id != auth.0.user_id && !auth.is_admin() {
+    if detail.order.user_id == auth.0.user_id {
+        return Ok(HttpResponse::Ok().json(detail));
+    }
+
+    if auth.is_admin() {
+        require_order_in_admin_scope(auth.0.user_id, pool.get_ref(), order_id).await?;
+    } else {
         return Err(AppError::Forbidden(
             "You do not have access to this order.".into(),
         ));
