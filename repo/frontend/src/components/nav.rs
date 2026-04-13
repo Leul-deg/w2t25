@@ -6,6 +6,77 @@ use crate::api::notifications;
 use crate::router::Route;
 use crate::state::AppStateContext;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavTarget {
+    Home,
+    Store,
+    Orders,
+    Checkin,
+    CheckinReview,
+    AdminProducts,
+    AdminOrders,
+    AdminUsers,
+    AdminDeletionRequests,
+    AdminConfig,
+    AdminKpi,
+    AdminReports,
+    AdminBackups,
+    AdminLogs,
+    TeacherClasses,
+    Inbox,
+    Preferences,
+    Login,
+}
+
+fn nav_targets_for_roles(is_authenticated: bool, roles: &[String]) -> Vec<NavTarget> {
+    if !is_authenticated {
+        return vec![NavTarget::Login];
+    }
+
+    let has_role = |role: &str| roles.iter().any(|r| r == role);
+    let is_admin = has_role("Administrator");
+    let is_teacher = has_role("Teacher");
+    let is_student = has_role("Student");
+    let is_parent = has_role("Parent");
+    let is_staff = has_role("AcademicStaff");
+
+    let mut targets = vec![
+        NavTarget::Home,
+        NavTarget::Store,
+        NavTarget::Inbox,
+        NavTarget::Preferences,
+    ];
+
+    if is_student || is_parent {
+        targets.push(NavTarget::Orders);
+        targets.push(NavTarget::Checkin);
+    }
+
+    if is_admin || is_teacher || is_staff {
+        targets.push(NavTarget::CheckinReview);
+    }
+
+    if is_admin {
+        targets.extend([
+            NavTarget::AdminProducts,
+            NavTarget::AdminOrders,
+            NavTarget::AdminUsers,
+            NavTarget::AdminDeletionRequests,
+            NavTarget::AdminConfig,
+            NavTarget::AdminKpi,
+            NavTarget::AdminReports,
+            NavTarget::AdminBackups,
+            NavTarget::AdminLogs,
+        ]);
+    }
+
+    if is_teacher {
+        targets.push(NavTarget::TeacherClasses);
+    }
+
+    targets
+}
+
 #[derive(Properties, PartialEq)]
 pub struct NavProps {
     pub on_logout: Callback<()>,
@@ -123,5 +194,42 @@ pub fn nav(props: &NavProps) -> Html {
             <span class="brand">{ "Meridian" }</span>
             { nav_links }
         </nav>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{nav_targets_for_roles, NavTarget};
+
+    #[test]
+    fn unauthenticated_nav_only_shows_login() {
+        let targets = nav_targets_for_roles(false, &[]);
+        assert_eq!(targets, vec![NavTarget::Login]);
+    }
+
+    #[test]
+    fn student_nav_includes_orders_and_checkin() {
+        let targets = nav_targets_for_roles(true, &[String::from("Student")]);
+        assert!(targets.contains(&NavTarget::Orders));
+        assert!(targets.contains(&NavTarget::Checkin));
+        assert!(!targets.contains(&NavTarget::AdminUsers));
+    }
+
+    #[test]
+    fn administrator_nav_includes_admin_console_entries() {
+        let targets = nav_targets_for_roles(true, &[String::from("Administrator")]);
+        assert!(targets.contains(&NavTarget::AdminUsers));
+        assert!(targets.contains(&NavTarget::AdminDeletionRequests));
+        assert!(targets.contains(&NavTarget::AdminReports));
+        assert!(targets.contains(&NavTarget::CheckinReview));
+    }
+
+    #[test]
+    fn teacher_nav_includes_review_and_classes_only() {
+        let targets = nav_targets_for_roles(true, &[String::from("Teacher")]);
+        assert!(targets.contains(&NavTarget::CheckinReview));
+        assert!(targets.contains(&NavTarget::TeacherClasses));
+        assert!(!targets.contains(&NavTarget::Orders));
+        assert!(!targets.contains(&NavTarget::AdminUsers));
     }
 }
