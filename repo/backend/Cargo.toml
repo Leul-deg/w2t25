@@ -43,6 +43,21 @@ version = "= 0.5.9"
 [dependencies.actix-http]
 version = "= 3.11.2"
 
+# ---------------------------------------------------------------------------
+# Test targets
+# ---------------------------------------------------------------------------
+# Tests in tests/ run automatically via `cargo test`.
+# Tests in API_TESTS/ and e2e_tests/ are explicitly declared here so Cargo
+# picks them up from their organised directories.
+
+[[test]]
+name = "api_authorization_tests"
+path = "API_TESTS/api_authorization_tests.rs"
+
+[[test]]
+name = "e2e_workflow_tests"
+path = "e2e_tests/e2e_workflow_tests.rs"
+
 [dev-dependencies]
 actix-web = { version = "= 4.9.0" }
 tokio = { version = "1", features = ["full"] }

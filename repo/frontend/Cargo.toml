@@ -9,6 +9,20 @@ edition = "2021"
 name = "meridian-frontend"
 path = "src/main.rs"
 
+# Library target exposes pure-Rust modules for integration tests in
+# frontend_tests/.  Heavy Yew/WASM page components remain in the binary.
+[lib]
+name = "meridian_frontend"
+path = "src/lib.rs"
+crate-type = ["rlib"]
+
+# ---------------------------------------------------------------------------
+# Test targets
+# ---------------------------------------------------------------------------
+[[test]]
+name = "frontend_logic_tests"
+path = "frontend_tests/frontend_logic_tests.rs"
+
 [dependencies]
 yew = { version = "0.21", features = ["csr"] }
 yew-router = "0.18"

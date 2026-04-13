@@ -115,6 +115,8 @@ run_db_backed_suites() {
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test hardening_tests -- --include-ignored
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test commerce_tests -- --include-ignored --test-threads=1
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test admin_scope_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_authorization_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test e2e_workflow_tests -- --include-ignored
       DATABASE_URL="$SEEDED_DB_URL" cargo test --bin meridian-backend -- --include-ignored
     )
   else
@@ -128,6 +130,8 @@ run_db_backed_suites() {
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test hardening_tests -- --include-ignored && \
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test commerce_tests -- --include-ignored --test-threads=1 && \
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test admin_scope_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_authorization_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test e2e_workflow_tests -- --include-ignored && \
         DATABASE_URL='$SEEDED_DB_URL' cargo test --bin meridian-backend -- --include-ignored"
   fi
 }

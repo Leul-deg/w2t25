@@ -1,3 +1,11 @@
+/// API authorization integration tests.
+///
+/// Verifies HTTP-level authentication (401) and role/scope enforcement (403)
+/// for the most security-critical endpoints.
+///
+/// Requires a live PostgreSQL database:
+///   TEST_DATABASE_URL=postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable \
+///     cargo test --test api_authorization_tests -- --include-ignored
 use actix_web::test::{call_service, init_service, TestRequest};
 use actix_web::{web, App};
 use meridian_backend::routes::configure_routes;
@@ -64,45 +72,42 @@ async fn make_super_admin(pool: &PgPool, user_id: Uuid) {
         .expect("failed to set super admin");
 }
 
+/// Seeds district → campus → school and returns (campus_id, school_id).
+/// Uses the actual schema columns (no `code` column — districts/campuses/schools
+/// identify uniquely by name within their parent).
 async fn seed_campus_and_school(pool: &PgPool, suffix: &str) -> (Uuid, Uuid) {
     let district_id = Uuid::new_v4();
     let campus_id = Uuid::new_v4();
     let school_id = Uuid::new_v4();
 
     sqlx::query(
-        "INSERT INTO districts (id, name, code, created_at)
-         VALUES ($1, $2, $3, NOW())
-         ON CONFLICT (code) DO NOTHING",
+        "INSERT INTO districts (id, name, state, created_at)
+         VALUES ($1, $2, 'TX', NOW())",
     )
     .bind(district_id)
-    .bind(format!("District {}", suffix))
-    .bind(format!("D-{}", suffix))
+    .bind(format!("District_{}", suffix))
     .execute(pool)
     .await
     .expect("seed district failed");
 
     sqlx::query(
-        "INSERT INTO campuses (id, district_id, name, code, created_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (code) DO NOTHING",
+        "INSERT INTO campuses (id, district_id, name, created_at)
+         VALUES ($1, $2, $3, NOW())",
     )
     .bind(campus_id)
     .bind(district_id)
-    .bind(format!("Campus {}", suffix))
-    .bind(format!("C-{}", suffix))
+    .bind(format!("Campus_{}", suffix))
     .execute(pool)
     .await
     .expect("seed campus failed");
 
     sqlx::query(
-        "INSERT INTO schools (id, campus_id, name, code, created_at)
-         VALUES ($1, $2, $3, $4, NOW())
-         ON CONFLICT (code) DO NOTHING",
+        "INSERT INTO schools (id, campus_id, name, school_type, created_at)
+         VALUES ($1, $2, $3, 'general', NOW())",
     )
     .bind(school_id)
     .bind(campus_id)
-    .bind(format!("School {}", suffix))
-    .bind(format!("S-{}", suffix))
+    .bind(format!("School_{}", suffix))
     .execute(pool)
     .await
     .expect("seed school failed");
@@ -140,6 +145,11 @@ async fn login_token(
     body["token"].as_str().expect("token missing").to_string()
 }
 
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+/// Reports and backup list endpoints must reject unauthenticated requests.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn test_reports_and_backups_require_authentication() {
@@ -158,6 +168,7 @@ async fn test_reports_and_backups_require_authentication() {
     }
 }
 
+/// Non-admin roles (e.g. Teacher) must receive 403 on admin-only endpoints.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn test_non_admin_forbidden_from_reports_and_backups() {
@@ -184,6 +195,8 @@ async fn test_non_admin_forbidden_from_reports_and_backups() {
     }
 }
 
+/// A scoped admin (campus-limited, is_super_admin = false) must be denied 403
+/// on global operations such as reports and backups.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn test_scoped_admin_forbidden_from_global_reports_and_backups() {
@@ -212,6 +225,7 @@ async fn test_scoped_admin_forbidden_from_global_reports_and_backups() {
     }
 }
 
+/// A super-admin (is_super_admin = true) must be able to list reports and backups.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn test_super_admin_can_access_reports_and_backups_lists() {
@@ -237,4 +251,46 @@ async fn test_super_admin_can_access_reports_and_backups_lists() {
         let resp = call_service(&app, req).await;
         assert_eq!(resp.status(), 200, "{} should be accessible to super-admin", path);
     }
+}
+
+/// Student role must be denied 403 on the admin users endpoint.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_student_cannot_access_admin_users_endpoint() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let student_name = format!("api_student_{}", suffix);
+    seed_user(&pool, &student_name, "Student").await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &student_name).await;
+
+    let req = TestRequest::get()
+        .uri("/api/v1/admin/users")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 403, "/api/v1/admin/users must be administrator-only");
+}
+
+/// Unauthenticated request to /api/v1/admin/users must receive 401.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_users_endpoint_requires_authentication() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::get().uri("/api/v1/admin/users").to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 401, "/api/v1/admin/users must reject unauthenticated requests");
 }
