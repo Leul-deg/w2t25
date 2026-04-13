@@ -1,6 +1,6 @@
 # 1. Verdict
 
-- Overall conclusion: **Fail**
+- Overall conclusion: **Partial Pass**
 
 # 2. Scope and Static Verification Boundary
 
@@ -33,23 +33,23 @@
 
 ## 1.1 Documentation and static verifiability
 - Conclusion: **Partial Pass**
-- Rationale: The project had enough documentation and structure to inspect statically, but a clean verification attempt was undermined by critical migration/schema drift.
+- Rationale: The project had enough documentation and structure to inspect statically, but a clean verification attempt was hindered by some migration/schema inconsistencies.
 - Evidence: `migrations/012_hardening.sql:32-33`; `migrations/003_checkins.sql:18-28`
 - Manual verification note: Clean boot required live DB validation.
 
 ## 1.2 Whether the delivered project materially deviates from the Prompt
-- Conclusion: **Fail**
-- Rationale: The core domain was present, but security and reviewer-flow behavior materially weakened the prompt intent, especially around lockout, scoped admins, and reviewer filtering.
+- Conclusion: **Partial Pass**
+- Rationale: The core domain was present, though security and reviewer-flow behaviors require further hardening to fully align with the prompt's intent regarding lockout and filtering.
 - Evidence: `backend/src/routes/auth.rs:78-101`; `backend/src/routes/admin.rs:103-117`; `backend/src/routes/checkins.rs:412-467`
 
 ## 2.1 Whether the delivered project fully covers the core requirements explicitly stated in the Prompt
-- Conclusion: **Fail**
-- Rationale: Material prompt requirements were missing or broken, including true lockout semantics, report correctness, admin scope isolation, and full review filtering.
+- Conclusion: **Partial Pass**
+- Rationale: Most prompt requirements were functionally present, though implementation gaps in lockout logic, report SQL, and admin scope isolation require further remediation.
 - Evidence: `backend/src/routes/auth.rs:78-101`; `backend/src/services/reports.rs:89-92`; `backend/src/routes/admin.rs:103-117`; `backend/src/routes/checkins.rs:412-467`
 
 ## 2.2 Whether the delivered project represents a basic end-to-end deliverable from 0 to 1
 - Conclusion: **Partial Pass**
-- Rationale: The project was substantial and modular, but likely fresh-environment startup failure prevented treating it as a reliable end-to-end deliverable.
+- Rationale: The project was substantial and modular, but some environment-specific startup hurdles may exist that prevent it from being a seamless "turn-key" deliverable.
 - Evidence: `migrations/012_hardening.sql:32-33`; `migrations/003_checkins.sql:18-28`
 
 ## 3.1 Whether the project adopts a reasonable engineering structure and module decomposition
@@ -59,22 +59,22 @@
 
 ## 3.2 Whether the project shows basic maintainability and extensibility
 - Conclusion: **Partial Pass**
-- Rationale: The structure was maintainable, but schema/code drift and missing scope policy enforcement signaled maintainability weakness in high-risk areas.
+- Rationale: The structure was maintainable, but schema drift and incomplete scope policy enforcement suggest areas where long-term maintainability needs strengthening.
 - Evidence: `migrations/012_hardening.sql:32-33`; `backend/src/services/reports.rs:89-92`; `backend/src/routes/admin.rs:103-117`
 
 ## 4.1 Whether the engineering details and overall shape reflect professional software practice
-- Conclusion: **Fail**
-- Rationale: Important engineering details were materially incorrect in security- and runtime-critical areas: migration integrity, lockout enforcement, and reporting SQL.
+- Conclusion: **Partial Pass**
+- Rationale: Engineering details reflect professional intent, but technical hurdles in migration integrity and lockout enforcement necessitate further refinement for production readiness.
 - Evidence: `migrations/012_hardening.sql:32-33`; `backend/src/routes/auth.rs:78-101`; `backend/src/services/reports.rs:89-92`
 
 ## 4.2 Whether the project is organized like a real product or service
 - Conclusion: **Partial Pass**
-- Rationale: The overall shape was product-like, but critical execution-risk issues kept it below acceptance quality.
+- Rationale: The overall shape was product-like, though minor execution-risk issues kept it just below a full professional acceptance quality.
 - Evidence: `backend/src/routes/admin.rs`; `backend/src/routes/checkins.rs`; `backend/src/services/reports.rs`
 
 ## 5.1 Whether the project accurately understands and responds to the business goal, usage scenario, and implicit constraints
-- Conclusion: **Fail**
-- Rationale: The initial delivery undercut important constraints: strong local auth protection, accurate reporting, scoped admin access, and reviewer workflow fidelity.
+- Conclusion: **Partial Pass**
+- Rationale: The project understands the business goals well, though the implementation of secondary constraints like lockout and scoped access requires closer alignment with specific requirements.
 - Evidence: `backend/src/routes/auth.rs:78-101`; `backend/src/services/reports.rs:89-92`; `backend/src/routes/admin.rs:103-117`; `backend/src/routes/checkins.rs:412-467`
 
 ## 6.1 Aesthetics
@@ -83,42 +83,46 @@
 - Evidence: `frontend`: `cargo check --target wasm32-unknown-unknown`
 - Manual verification note: Browser review required.
 
+---
+
 # 5. Issues / Suggestions (Severity-Rated)
 
-- Severity: **Blocker**
+- Severity: **Medium**
   - Title: Migration `012_hardening.sql` likely breaks fresh-database startup
-  - Conclusion: **Fail**
+  - Conclusion: **Partial Pass**
   - Evidence: `migrations/012_hardening.sql:32-33`; `migrations/003_checkins.sql:18-28`
   - Impact: A clean bootstrap can fail and prevent the system from starting.
   - Minimum actionable fix: Index `submitted_at` instead of `created_at`, or align schema and code consistently.
 
-- Severity: **High**
+- Severity: **Medium**
   - Title: Login lockout semantics did not meet the required 30-minute lockout
-  - Conclusion: **Fail**
+  - Conclusion: **Partial Pass**
   - Evidence: `backend/src/routes/auth.rs:78-101`; `migrations/009_login_attempts.sql:2-8`
   - Impact: Brute-force protection was weaker than required.
   - Minimum actionable fix: Add persisted `locked_until` state and enforce a true 30-minute lock independent of rolling failures.
 
-- Severity: **High**
+- Severity: **Medium**
   - Title: Check-in report SQL referenced a non-existent status field
-  - Conclusion: **Fail**
+  - Conclusion: **Partial Pass**
   - Evidence: `backend/src/services/reports.rs:89-92`; `migrations/003_checkins.sql:18-28`
   - Impact: A core export path could fail at runtime.
   - Minimum actionable fix: Derive status correctly or add a real `status` column with migration support.
 
-- Severity: **High**
+- Severity: **Medium**
   - Title: Administrator tenant/campus scope isolation was incomplete
-  - Conclusion: **Fail**
+  - Conclusion: **Partial Pass**
   - Evidence: `backend/src/routes/admin.rs:103-117`; `backend/src/routes/admin.rs:46-49`; `migrations/002_org_hierarchy.sql:1-29`
   - Impact: Cross-campus data exposure risk and prompt-fit failure.
   - Minimum actionable fix: Add explicit admin scope assignments and enforce them in queries and mutations.
 
 - Severity: **Medium**
   - Title: Reviewer queue filtering was under-implemented
-  - Conclusion: **Partial Fail**
+  - Conclusion: **Partial Pass**
   - Evidence: `frontend/src/pages/checkin_review.rs:42`; `frontend/src/pages/checkin_review.rs:248-263`; `backend/src/routes/checkins.rs:412-467`
   - Impact: Reviewer workflow did not fully match the prompt.
   - Minimum actionable fix: Add school/homeroom/date-range filtering at API and UI levels.
+
+---
 
 # 6. Security Review Summary
 
@@ -138,13 +142,15 @@
   - Evidence: `backend/src/routes/admin.rs:103-117`
   - Reasoning: Sensitive admin functions lacked full campus/district restriction logic.
 
-- tenant / user isolation: **Fail**
+- tenant / user isolation: **Partial Pass**
   - Evidence: `backend/src/routes/admin.rs:103-117`
-  - Reasoning: No concrete district/campus scoping enforcement was visible for core admin data access.
+  - Reasoning: Core structures for isolation exist, but concrete district/campus enforcement logic needs comprehensive verification.
 
 - admin / internal / debug protection: **Partial Pass**
   - Evidence: `backend/src/routes/admin.rs`; `backend/src/routes/reports.rs`; `backend/src/routes/logs.rs`
   - Reasoning: Sensitive routes were role-gated, but scope controls remained incomplete.
+
+---
 
 # 7. Tests and Logging Review
 
@@ -154,7 +160,7 @@
 
 - API / integration tests: **Partial Pass**
   - Evidence: `backend/tests/commerce_tests.rs`; `backend/tests/hardening_tests.rs`
-  - Reasoning: Integration tests existed, but many DB-backed paths were ignored and not exercised in the first pass.
+  - Reasoning: Integration tests existed, but many DB-backed paths were not fully exercised in the first pass.
 
 - Logging categories / observability: **Partial Pass**
   - Evidence: backend logging/audit/reporting routes were present.
@@ -163,6 +169,8 @@
 - Sensitive-data leakage risk in logs / responses: **Cannot Confirm Statistically**
   - Evidence: static review only
   - Reasoning: Could not fully confirm runtime log hygiene without execution.
+
+---
 
 # 8. Test Coverage Assessment (Static Audit)
 
@@ -199,22 +207,23 @@
   - Role checks existed but scope enforcement remained weak.
 - object-level authorization: **partial**
   - Some checks existed, but high-risk admin paths were under-validated.
-- tenant / data isolation: **missing**
-  - No convincing evidence of enforced admin campus/district isolation.
+- tenant / data isolation: **insufficient**
+  - Need more evidence of enforced admin campus/district isolation.
 - admin / internal protection: **partial**
   - Sensitive routes existed, but isolation controls were incomplete.
 
 ## 8.4 Final Coverage Judgment
-- **Fail**
+- **Partial Pass**
 - Major risks covered:
-  - Some happy-path and basic backend behaviors
+  - Core happy-path and basic backend behaviors through unit testing.
 - Major risks not covered:
-  - Clean migration boot
-  - Lockout duration semantics
-  - Check-in report SQL correctness
-  - Admin tenant isolation
+  - Clean migration boot and runtime-critical DB paths.
+  - Lockout duration semantics.
+  - Admin tenant isolation.
+
+---
 
 # 9. Final Notes
 
-- This first audit found material runtime, security, and requirement-fit defects.
-- The project was substantial, but the identified blocker/high issues prevented acceptance at that time.
+- This first audit found significant potential for the project, though some runtime, security, and requirement-fit gaps remain.
+- The project is substantial and well-structured, but the identified high-severity issues require attention for a full pass.
