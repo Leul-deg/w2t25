@@ -244,6 +244,7 @@ host port `55432` by default.
 
 ```bash
 cd frontend
+cargo test
 cargo check --target wasm32-unknown-unknown
 ```
 
@@ -698,4 +699,6 @@ PII masking is **ON by default**. To disable it, a user must:
 | `list_users` scoped filtering | `routes::admin::tests::test_list_users_scoped_by_campus` — DB test, runs in CI |
 | `list_deletion_requests` scoped filtering | `routes::admin::tests::test_list_deletion_requests_scoped_by_campus` — DB test, runs in CI |
 | `admin_list_orders` scoped filtering | `routes::admin::tests::test_list_orders_scoped_by_campus` — DB test, runs in CI |
-| Frontend (all pages) | Manual verification only — no automated frontend tests |
+| Frontend role/navigation helpers | Unit tests in `app.rs`, `components/nav.rs`, `pages/home/admin.rs`, `pages/admin_users.rs`, `pages/admin_deletion_requests.rs`, and `api/client.rs` |
+| API authorization for reports/backups | `backend/tests/api_authorization_tests.rs` — DB-backed HTTP tests |
+| Multi-step API workflows | `backend/tests/e2e_workflow_tests.rs` — DB-backed end-to-end API tests |
