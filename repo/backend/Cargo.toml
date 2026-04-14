@@ -55,6 +55,42 @@ name = "api_authorization_tests"
 path = "API_TESTS/api_authorization_tests.rs"
 
 [[test]]
+name = "api_auth_payload_tests"
+path = "API_TESTS/api_auth_payload_tests.rs"
+
+[[test]]
+name = "api_products_tests"
+path = "API_TESTS/api_products_tests.rs"
+
+[[test]]
+name = "api_notifications_payload_tests"
+path = "API_TESTS/api_notifications_payload_tests.rs"
+
+[[test]]
+name = "api_admin_users_payload_tests"
+path = "API_TESTS/api_admin_users_payload_tests.rs"
+
+[[test]]
+name = "api_orders_tests"
+path = "API_TESTS/api_orders_tests.rs"
+
+[[test]]
+name = "api_config_tests"
+path = "API_TESTS/api_config_tests.rs"
+
+[[test]]
+name = "api_logs_tests"
+path = "API_TESTS/api_logs_tests.rs"
+
+[[test]]
+name = "api_checkins_tests"
+path = "API_TESTS/api_checkins_tests.rs"
+
+[[test]]
+name = "api_backups_reports_tests"
+path = "API_TESTS/api_backups_reports_tests.rs"
+
+[[test]]
 name = "e2e_workflow_tests"
 path = "e2e_tests/e2e_workflow_tests.rs"
 

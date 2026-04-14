@@ -183,3 +183,97 @@ fn fmt_time(iso: &str) -> String {
         .map(|s| s.replace('T', " "))
         .unwrap_or_else(|| iso.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{fmt_time, notif_type_css, notif_type_label};
+
+    // ---------------------------------------------------------------------------
+    // notif_type_css
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn notif_type_css_checkin() {
+        assert_eq!(notif_type_css("checkin"), "notif-type checkin");
+    }
+
+    #[test]
+    fn notif_type_css_order() {
+        assert_eq!(notif_type_css("order"), "notif-type order");
+    }
+
+    #[test]
+    fn notif_type_css_alert() {
+        assert_eq!(notif_type_css("alert"), "notif-type alert");
+    }
+
+    #[test]
+    fn notif_type_css_system() {
+        assert_eq!(notif_type_css("system"), "notif-type system");
+    }
+
+    #[test]
+    fn notif_type_css_unknown_falls_back_to_general() {
+        assert_eq!(notif_type_css("announcement"), "notif-type general");
+        assert_eq!(notif_type_css(""), "notif-type general");
+    }
+
+    // ---------------------------------------------------------------------------
+    // notif_type_label
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn notif_type_label_checkin() {
+        assert_eq!(notif_type_label("checkin"), "Check-In");
+    }
+
+    #[test]
+    fn notif_type_label_order() {
+        assert_eq!(notif_type_label("order"), "Order");
+    }
+
+    #[test]
+    fn notif_type_label_alert() {
+        assert_eq!(notif_type_label("alert"), "Alert");
+    }
+
+    #[test]
+    fn notif_type_label_system() {
+        assert_eq!(notif_type_label("system"), "System");
+    }
+
+    #[test]
+    fn notif_type_label_unknown_falls_back_to_general() {
+        assert_eq!(notif_type_label("promotion"), "General");
+        assert_eq!(notif_type_label(""), "General");
+    }
+
+    // ---------------------------------------------------------------------------
+    // fmt_time
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn fmt_time_replaces_t_in_iso_string() {
+        assert_eq!(fmt_time("2026-04-01T14:30:00Z"), "2026-04-01 14:30");
+    }
+
+    #[test]
+    fn fmt_time_truncates_to_16_chars() {
+        // Exactly 16 chars after the 'T' replacement
+        let result = fmt_time("2026-01-15T08:05:00.000Z");
+        assert_eq!(result, "2026-01-15 08:05");
+    }
+
+    #[test]
+    fn fmt_time_short_string_returns_original() {
+        // String shorter than 16 chars cannot be sliced — returns original
+        let short = "2026-04-01T";
+        let result = fmt_time(short);
+        assert_eq!(result, short);
+    }
+
+    #[test]
+    fn fmt_time_empty_string_returns_empty() {
+        assert_eq!(fmt_time(""), "");
+    }
+}

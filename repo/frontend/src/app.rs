@@ -106,21 +106,123 @@ mod tests {
     use super::{is_admin_route, requires_auth};
     use crate::router::Route;
 
+    // ---------------------------------------------------------------------------
+    // is_admin_route — all 21 route variants
+    // ---------------------------------------------------------------------------
+
     #[test]
-    fn admin_routes_are_classified_correctly() {
-        assert!(is_admin_route(&Route::AdminUsers));
-        assert!(is_admin_route(&Route::AdminDeletionRequests));
-        assert!(is_admin_route(&Route::AdminReports));
-        assert!(!is_admin_route(&Route::Store));
-        assert!(!is_admin_route(&Route::Checkin));
+    fn is_admin_route_admin() {
+        assert!(is_admin_route(&Route::Admin));
     }
 
     #[test]
-    fn auth_requirements_are_classified_correctly() {
+    fn is_admin_route_admin_users() {
+        assert!(is_admin_route(&Route::AdminUsers));
+    }
+
+    #[test]
+    fn is_admin_route_admin_deletion_requests() {
+        assert!(is_admin_route(&Route::AdminDeletionRequests));
+    }
+
+    #[test]
+    fn is_admin_route_admin_products() {
+        assert!(is_admin_route(&Route::AdminProducts));
+    }
+
+    #[test]
+    fn is_admin_route_admin_orders() {
+        assert!(is_admin_route(&Route::AdminOrders));
+    }
+
+    #[test]
+    fn is_admin_route_admin_config() {
+        assert!(is_admin_route(&Route::AdminConfig));
+    }
+
+    #[test]
+    fn is_admin_route_admin_kpi() {
+        assert!(is_admin_route(&Route::AdminKpi));
+    }
+
+    #[test]
+    fn is_admin_route_admin_reports() {
+        assert!(is_admin_route(&Route::AdminReports));
+    }
+
+    #[test]
+    fn is_admin_route_admin_backups() {
+        assert!(is_admin_route(&Route::AdminBackups));
+    }
+
+    #[test]
+    fn is_admin_route_admin_logs() {
+        assert!(is_admin_route(&Route::AdminLogs));
+    }
+
+    #[test]
+    fn is_admin_route_non_admin_routes_return_false() {
+        assert!(!is_admin_route(&Route::Home));
+        assert!(!is_admin_route(&Route::Login));
+        assert!(!is_admin_route(&Route::Store));
+        assert!(!is_admin_route(&Route::Orders));
+        assert!(!is_admin_route(&Route::TeacherClasses));
+        assert!(!is_admin_route(&Route::Checkin));
+        assert!(!is_admin_route(&Route::CheckinReview));
+        assert!(!is_admin_route(&Route::Inbox));
+        assert!(!is_admin_route(&Route::Preferences));
+        assert!(!is_admin_route(&Route::Unauthorized));
+        assert!(!is_admin_route(&Route::NotFound));
+    }
+
+    // ---------------------------------------------------------------------------
+    // requires_auth — all 21 route variants
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn requires_auth_login_is_false() {
         assert!(!requires_auth(&Route::Login));
+    }
+
+    #[test]
+    fn requires_auth_unauthorized_is_false() {
         assert!(!requires_auth(&Route::Unauthorized));
-        assert!(requires_auth(&Route::Store));
-        assert!(requires_auth(&Route::AdminLogs));
+    }
+
+    #[test]
+    fn requires_auth_not_found_is_false() {
+        assert!(!requires_auth(&Route::NotFound));
+    }
+
+    #[test]
+    fn requires_auth_all_authenticated_routes_return_true() {
+        let auth_required = [
+            Route::Home,
+            Route::Store,
+            Route::Orders,
+            Route::Admin,
+            Route::AdminUsers,
+            Route::AdminDeletionRequests,
+            Route::AdminProducts,
+            Route::AdminOrders,
+            Route::AdminConfig,
+            Route::AdminKpi,
+            Route::AdminReports,
+            Route::AdminBackups,
+            Route::AdminLogs,
+            Route::TeacherClasses,
+            Route::Checkin,
+            Route::CheckinReview,
+            Route::Inbox,
+            Route::Preferences,
+        ];
+        for route in &auth_required {
+            assert!(
+                requires_auth(route),
+                "requires_auth must be true for {:?}",
+                route
+            );
+        }
     }
 }
 

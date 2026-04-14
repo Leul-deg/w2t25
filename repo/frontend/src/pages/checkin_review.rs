@@ -603,3 +603,103 @@ fn capitalize(s: &str) -> String {
         Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{capitalize, decision_css, decision_label, status_css};
+
+    // ---------------------------------------------------------------------------
+    // status_css
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn status_css_open() {
+        assert_eq!(status_css("open"), "badge badge-open");
+    }
+
+    #[test]
+    fn status_css_accepting_late() {
+        assert_eq!(status_css("accepting_late"), "badge badge-late");
+    }
+
+    #[test]
+    fn status_css_upcoming() {
+        assert_eq!(status_css("upcoming"), "badge badge-upcoming");
+    }
+
+    #[test]
+    fn status_css_closed_and_fallback() {
+        assert_eq!(status_css("closed"), "badge badge-closed");
+        assert_eq!(status_css("unknown"), "badge badge-closed");
+        assert_eq!(status_css(""), "badge badge-closed");
+    }
+
+    // ---------------------------------------------------------------------------
+    // decision_css
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn decision_css_approved() {
+        assert_eq!(decision_css("approved"), "decision-badge approved");
+    }
+
+    #[test]
+    fn decision_css_rejected() {
+        assert_eq!(decision_css("rejected"), "decision-badge rejected");
+    }
+
+    #[test]
+    fn decision_css_pending_and_fallback() {
+        assert_eq!(decision_css("pending"), "decision-badge pending");
+        assert_eq!(decision_css(""), "decision-badge pending");
+    }
+
+    // ---------------------------------------------------------------------------
+    // decision_label
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn decision_label_approved() {
+        assert_eq!(decision_label("approved"), "Approved");
+    }
+
+    #[test]
+    fn decision_label_rejected_shows_denied() {
+        assert_eq!(decision_label("rejected"), "Denied");
+    }
+
+    #[test]
+    fn decision_label_pending_and_fallback() {
+        assert_eq!(decision_label("pending"), "Pending");
+        assert_eq!(decision_label(""), "Pending");
+    }
+
+    // ---------------------------------------------------------------------------
+    // capitalize
+    // ---------------------------------------------------------------------------
+
+    #[test]
+    fn capitalize_uppercases_first_char() {
+        assert_eq!(capitalize("hello"), "Hello");
+    }
+
+    #[test]
+    fn capitalize_preserves_rest() {
+        assert_eq!(capitalize("openedWindow"), "OpenedWindow");
+    }
+
+    #[test]
+    fn capitalize_empty_string_returns_empty() {
+        assert_eq!(capitalize(""), "");
+    }
+
+    #[test]
+    fn capitalize_single_char() {
+        assert_eq!(capitalize("a"), "A");
+    }
+
+    #[test]
+    fn capitalize_already_uppercase_unchanged() {
+        assert_eq!(capitalize("Approved"), "Approved");
+    }
+}

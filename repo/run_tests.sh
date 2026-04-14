@@ -116,6 +116,15 @@ run_db_backed_suites() {
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test commerce_tests -- --include-ignored --test-threads=1
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test admin_scope_tests -- --include-ignored
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_authorization_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_auth_payload_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_products_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_notifications_payload_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_admin_users_payload_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_orders_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_config_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_logs_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_checkins_tests -- --include-ignored
+      TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test api_backups_reports_tests -- --include-ignored
       TEST_DATABASE_URL="$SEEDED_DB_URL" cargo test --test e2e_workflow_tests -- --include-ignored
       DATABASE_URL="$SEEDED_DB_URL" cargo test --bin meridian-backend -- --include-ignored
     )
@@ -131,6 +140,15 @@ run_db_backed_suites() {
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test commerce_tests -- --include-ignored --test-threads=1 && \
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test admin_scope_tests -- --include-ignored && \
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_authorization_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_auth_payload_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_products_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_notifications_payload_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_admin_users_payload_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_orders_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_config_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_logs_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_checkins_tests -- --include-ignored && \
+        TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test api_backups_reports_tests -- --include-ignored && \
         TEST_DATABASE_URL='$SEEDED_DB_URL' cargo test --test e2e_workflow_tests -- --include-ignored && \
         DATABASE_URL='$SEEDED_DB_URL' cargo test --bin meridian-backend -- --include-ignored"
   fi

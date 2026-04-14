@@ -23,6 +23,10 @@ crate-type = ["rlib"]
 name = "frontend_logic_tests"
 path = "frontend_tests/frontend_logic_tests.rs"
 
+[[test]]
+name = "store_display_tests"
+path = "frontend_tests/store_display_tests.rs"
+
 [dependencies]
 yew = { version = "0.21", features = ["csr"] }
 yew-router = "0.18"

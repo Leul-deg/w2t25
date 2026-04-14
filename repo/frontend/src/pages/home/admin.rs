@@ -52,10 +52,96 @@ mod tests {
     use crate::router::Route;
 
     #[test]
-    fn admin_dashboard_cards_have_expected_routes() {
+    fn admin_dashboard_has_exactly_nine_cards() {
+        assert_eq!(admin_dashboard_cards().len(), 9);
+    }
+
+    #[test]
+    fn admin_dashboard_card_user_management() {
         let cards = admin_dashboard_cards();
-        assert!(cards.iter().any(|(title, _, route)| *title == "User Management" && *route == Route::AdminUsers));
-        assert!(cards.iter().any(|(title, _, route)| *title == "Orders Dashboard" && *route == Route::AdminOrders));
-        assert!(cards.iter().any(|(title, _, route)| *title == "Exports" && *route == Route::AdminReports));
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "User Management" && *r == Route::AdminUsers),
+            "must have User Management → AdminUsers"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_checkin_review() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Check-In Review" && *r == Route::CheckinReview),
+            "must have Check-In Review → CheckinReview"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_products_inventory() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Products & Inventory" && *r == Route::AdminProducts),
+            "must have Products & Inventory → AdminProducts"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_orders_dashboard() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Orders Dashboard" && *r == Route::AdminOrders),
+            "must have Orders Dashboard → AdminOrders"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_configuration() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Configuration" && *r == Route::AdminConfig),
+            "must have Configuration → AdminConfig"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_kpi_dashboard() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "KPI Dashboard" && *r == Route::AdminKpi),
+            "must have KPI Dashboard → AdminKpi"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_exports() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Exports" && *r == Route::AdminReports),
+            "must have Exports → AdminReports"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_backups() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Backups" && *r == Route::AdminBackups),
+            "must have Backups → AdminBackups"
+        );
+    }
+
+    #[test]
+    fn admin_dashboard_card_logs() {
+        let cards = admin_dashboard_cards();
+        assert!(
+            cards.iter().any(|(t, _, r)| *t == "Logs" && *r == Route::AdminLogs),
+            "must have Logs → AdminLogs"
+        );
+    }
+
+    #[test]
+    fn all_dashboard_cards_have_non_empty_title_and_description() {
+        for (title, description, _) in admin_dashboard_cards() {
+            assert!(!title.is_empty(), "card title must not be empty");
+            assert!(!description.is_empty(), "card description must not be empty");
+        }
     }
 }

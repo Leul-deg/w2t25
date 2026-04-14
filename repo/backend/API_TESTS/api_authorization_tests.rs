@@ -6,10 +6,11 @@
 /// Requires a live PostgreSQL database:
 ///   TEST_DATABASE_URL=postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable \
 ///     cargo test --test api_authorization_tests -- --include-ignored
-use actix_web::test::{call_service, init_service, TestRequest};
+use actix_web::test::{call_service, init_service, read_body_json, TestRequest};
 use actix_web::{web, App};
 use meridian_backend::routes::configure_routes;
 use meridian_backend::services::auth::hash_password;
+use serde_json::Value;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -149,7 +150,8 @@ async fn login_token(
 // Tests
 // ---------------------------------------------------------------------------
 
-/// Reports and backup list endpoints must reject unauthenticated requests.
+/// Reports and backup list endpoints must reject unauthenticated requests
+/// with 401 and an `error` field in the body.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]
 async fn test_reports_and_backups_require_authentication() {
@@ -165,6 +167,12 @@ async fn test_reports_and_backups_require_authentication() {
         let req = TestRequest::get().uri(path).to_request();
         let resp = call_service(&app, req).await;
         assert_eq!(resp.status(), 401, "{} should require auth", path);
+        let body: Value = read_body_json(resp).await;
+        assert!(
+            body["error"].is_string(),
+            "{} 401 response must have an `error` field",
+            path
+        );
     }
 }
 
@@ -192,6 +200,12 @@ async fn test_non_admin_forbidden_from_reports_and_backups() {
             .to_request();
         let resp = call_service(&app, req).await;
         assert_eq!(resp.status(), 403, "{} should be admin-only", path);
+        let body: Value = read_body_json(resp).await;
+        assert!(
+            body["error"].is_string(),
+            "{} 403 response must have an `error` field",
+            path
+        );
     }
 }
 
@@ -250,6 +264,13 @@ async fn test_super_admin_can_access_reports_and_backups_lists() {
             .to_request();
         let resp = call_service(&app, req).await;
         assert_eq!(resp.status(), 200, "{} should be accessible to super-admin", path);
+        let body: Value = read_body_json(resp).await;
+        assert!(
+            body.is_array(),
+            "{} 200 response must be a JSON array, got: {}",
+            path,
+            body
+        );
     }
 }
 

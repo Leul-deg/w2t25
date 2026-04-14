@@ -232,4 +232,71 @@ mod tests {
         assert!(!targets.contains(&NavTarget::Orders));
         assert!(!targets.contains(&NavTarget::AdminUsers));
     }
+
+    #[test]
+    fn parent_nav_includes_orders_and_checkin() {
+        let targets = nav_targets_for_roles(true, &[String::from("Parent")]);
+        assert!(targets.contains(&NavTarget::Orders), "parent must see Orders");
+        assert!(targets.contains(&NavTarget::Checkin), "parent must see Checkin");
+        assert!(!targets.contains(&NavTarget::AdminUsers), "parent must not see AdminUsers");
+        assert!(!targets.contains(&NavTarget::TeacherClasses), "parent must not see TeacherClasses");
+    }
+
+    #[test]
+    fn academic_staff_nav_includes_checkin_review() {
+        let targets = nav_targets_for_roles(true, &[String::from("AcademicStaff")]);
+        assert!(targets.contains(&NavTarget::CheckinReview), "staff must see CheckinReview");
+        assert!(!targets.contains(&NavTarget::AdminUsers), "staff must not see AdminUsers");
+        assert!(!targets.contains(&NavTarget::Orders), "staff must not see Orders");
+        assert!(!targets.contains(&NavTarget::TeacherClasses), "staff must not see TeacherClasses");
+    }
+
+    #[test]
+    fn multi_role_admin_teacher_gets_union_of_both_roles() {
+        let targets = nav_targets_for_roles(
+            true,
+            &[String::from("Administrator"), String::from("Teacher")],
+        );
+        // Admin entries
+        assert!(targets.contains(&NavTarget::AdminUsers));
+        assert!(targets.contains(&NavTarget::AdminReports));
+        // Teacher entries
+        assert!(targets.contains(&NavTarget::TeacherClasses));
+        assert!(targets.contains(&NavTarget::CheckinReview));
+    }
+
+    #[test]
+    fn authenticated_with_no_roles_gets_base_nav_only() {
+        // A user with no roles should still get the authenticated base nav
+        // (Home, Store, Inbox, Preferences) but no role-specific entries.
+        let targets = nav_targets_for_roles(true, &[]);
+        assert!(targets.contains(&NavTarget::Home), "base nav must include Home");
+        assert!(targets.contains(&NavTarget::Store), "base nav must include Store");
+        assert!(targets.contains(&NavTarget::Inbox), "base nav must include Inbox");
+        assert!(targets.contains(&NavTarget::Preferences), "base nav must include Preferences");
+        assert!(!targets.contains(&NavTarget::AdminUsers), "no roles must not get AdminUsers");
+        assert!(!targets.contains(&NavTarget::Orders), "no roles must not get Orders");
+        assert!(!targets.contains(&NavTarget::CheckinReview), "no roles must not get CheckinReview");
+    }
+
+    #[test]
+    fn authenticated_base_nav_always_includes_core_entries() {
+        for role in &["Student", "Teacher", "Administrator", "Parent", "AcademicStaff"] {
+            let targets = nav_targets_for_roles(true, &[role.to_string()]);
+            assert!(targets.contains(&NavTarget::Home),
+                "role {} must get Home in nav", role);
+            assert!(targets.contains(&NavTarget::Store),
+                "role {} must get Store in nav", role);
+            assert!(targets.contains(&NavTarget::Inbox),
+                "role {} must get Inbox in nav", role);
+        }
+    }
+
+    #[test]
+    fn unauthenticated_never_gets_admin_entries() {
+        let targets = nav_targets_for_roles(false, &[String::from("Administrator")]);
+        // Even if roles are somehow passed, unauthenticated state must return only Login
+        assert_eq!(targets, vec![NavTarget::Login],
+            "unauthenticated must see only Login regardless of role list");
+    }
 }
