@@ -197,19 +197,11 @@ pub async fn admin_create_product(
 
     let product_id = Uuid::new_v4();
 
-    let row = sqlx::query_as::<_, ProductRow>(&format!(
-        "WITH ins AS (
-             INSERT INTO products (id, name, description, price_cents, sku, category,
-                                   image_url, active, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())
-             RETURNING *
-         )
-         SELECT ins.id, ins.name, ins.description, ins.price_cents, ins.sku,
-                ins.category, ins.image_url, ins.active, ins.created_at, ins.updated_at,
-                i.quantity, i.low_stock_threshold
-         FROM ins
-         LEFT JOIN inventory i ON i.product_id = ins.id"
-    ))
+    sqlx::query(
+        "INSERT INTO products (id, name, description, price_cents, sku, category,
+                               image_url, active, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, NOW(), NOW())",
+    )
     .bind(product_id)
     .bind(body.name.trim())
     .bind(&body.description)
@@ -217,10 +209,10 @@ pub async fn admin_create_product(
     .bind(&body.sku)
     .bind(&body.category)
     .bind(&body.image_url)
-    .fetch_one(pool.get_ref())
+    .execute(pool.get_ref())
     .await?;
 
-    // Create inventory row.
+    // Create inventory row before fetching so the join returns the correct quantity.
     let qty = body.initial_quantity.unwrap_or(0).max(0);
     sqlx::query(
         "INSERT INTO inventory (id, product_id, quantity, low_stock_threshold, last_updated_at)
@@ -230,6 +222,14 @@ pub async fn admin_create_product(
     .bind(product_id)
     .bind(qty)
     .execute(pool.get_ref())
+    .await?;
+
+    let row = sqlx::query_as::<_, ProductRow>(&format!(
+        "{} WHERE p.id = $1",
+        PRODUCT_DETAIL_QUERY
+    ))
+    .bind(product_id)
+    .fetch_one(pool.get_ref())
     .await?;
 
     // Audit log.
