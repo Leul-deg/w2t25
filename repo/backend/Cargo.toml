@@ -91,6 +91,10 @@ name = "api_backups_reports_tests"
 path = "API_TESTS/api_backups_reports_tests.rs"
 
 [[test]]
+name = "api_users_tests"
+path = "API_TESTS/api_users_tests.rs"
+
+[[test]]
 name = "e2e_workflow_tests"
 path = "e2e_tests/e2e_workflow_tests.rs"
 

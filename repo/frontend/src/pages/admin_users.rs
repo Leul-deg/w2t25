@@ -180,10 +180,60 @@ pub fn admin_users_page() -> Html {
 mod tests {
     use super::{available_account_states, normalize_optional_reason};
 
+    // -----------------------------------------------------------------------
+    // available_account_states
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn account_states_has_exactly_four_entries() {
+        assert_eq!(available_account_states().len(), 4);
+    }
+
     #[test]
     fn account_states_match_backend_contract() {
         let states = available_account_states();
         assert_eq!(states, ["active", "disabled", "frozen", "blacklisted"]);
+    }
+
+    #[test]
+    fn account_states_contains_active() {
+        assert!(available_account_states().contains(&"active"));
+    }
+
+    #[test]
+    fn account_states_contains_disabled() {
+        assert!(available_account_states().contains(&"disabled"));
+    }
+
+    #[test]
+    fn account_states_contains_frozen() {
+        assert!(available_account_states().contains(&"frozen"));
+    }
+
+    #[test]
+    fn account_states_contains_blacklisted() {
+        assert!(available_account_states().contains(&"blacklisted"));
+    }
+
+    #[test]
+    fn account_states_first_entry_is_active() {
+        // "active" is the default UI state — must be first so it pre-selects correctly.
+        assert_eq!(available_account_states()[0], "active");
+    }
+
+    // -----------------------------------------------------------------------
+    // normalize_optional_reason
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_string_reason_is_none() {
+        assert_eq!(normalize_optional_reason(""), None);
+    }
+
+    #[test]
+    fn whitespace_only_reason_is_none() {
+        assert_eq!(normalize_optional_reason("   "), None);
+        assert_eq!(normalize_optional_reason("\t\n"), None);
     }
 
     #[test]
@@ -193,10 +243,39 @@ mod tests {
     }
 
     #[test]
+    fn non_empty_reason_is_returned_as_some() {
+        assert!(normalize_optional_reason("policy violation").is_some());
+    }
+
+    #[test]
     fn non_empty_reason_is_trimmed() {
         assert_eq!(
             normalize_optional_reason("  policy violation "),
             Some("policy violation".to_string())
+        );
+    }
+
+    #[test]
+    fn reason_with_leading_whitespace_is_trimmed() {
+        assert_eq!(
+            normalize_optional_reason("   repeated absence"),
+            Some("repeated absence".to_string())
+        );
+    }
+
+    #[test]
+    fn reason_with_trailing_whitespace_is_trimmed() {
+        assert_eq!(
+            normalize_optional_reason("repeated absence   "),
+            Some("repeated absence".to_string())
+        );
+    }
+
+    #[test]
+    fn single_word_reason_is_preserved() {
+        assert_eq!(
+            normalize_optional_reason("blacklisted"),
+            Some("blacklisted".to_string())
         );
     }
 }

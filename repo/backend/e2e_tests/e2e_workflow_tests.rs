@@ -1,10 +1,28 @@
 use actix_web::test::{call_service, init_service, read_body_json, TestRequest};
 use actix_web::{web, App};
+use meridian_backend::config::Config;
 use meridian_backend::routes::configure_routes;
 use meridian_backend::services::auth::hash_password;
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use uuid::Uuid;
+
+fn test_config() -> Config {
+    let db_url = std::env::var("TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgres://meridian:meridian@127.0.0.1:55432/meridian_seeded?sslmode=disable".into());
+    let tmp = std::env::temp_dir().to_string_lossy().to_string();
+    Config {
+        database_url: db_url,
+        host: "127.0.0.1".into(),
+        port: 8080,
+        session_secret: "x".repeat(64),
+        session_max_age_seconds: 3600,
+        log_level: "info".into(),
+        backup_encryption_key: "test_backup_key_must_be_32chars_!".into(),
+        exports_dir: tmp.clone(),
+        backups_dir: tmp,
+    }
+}
 
 async fn test_pool() -> PgPool {
     let url = std::env::var("TEST_DATABASE_URL")
@@ -225,4 +243,316 @@ async fn test_student_preferences_and_notification_read_flow() {
     assert_eq!(resp.status(), 200);
     let body: serde_json::Value = read_body_json(resp).await;
     assert_eq!(body["unread"], 0);
+}
+
+// ---------------------------------------------------------------------------
+// E2E: check-in submit → admin decide → student notification
+// ---------------------------------------------------------------------------
+
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_checkin_submit_and_decide_workflow() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    // Build school infrastructure.
+    let district_id = Uuid::new_v4();
+    let campus_id = Uuid::new_v4();
+    let school_id = Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO districts (id, name, state, created_at) VALUES ($1, $2, 'TX', NOW())",
+    )
+    .bind(district_id)
+    .bind(format!("E2E District {}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed district");
+
+    sqlx::query(
+        "INSERT INTO campuses (id, district_id, name, created_at) VALUES ($1, $2, $3, NOW())",
+    )
+    .bind(campus_id)
+    .bind(district_id)
+    .bind(format!("E2E Campus {}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed campus");
+
+    sqlx::query(
+        "INSERT INTO schools (id, campus_id, name, school_type, created_at)
+         VALUES ($1, $2, $3, 'general', NOW())",
+    )
+    .bind(school_id)
+    .bind(campus_id)
+    .bind(format!("E2E School {}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed school");
+
+    // Open check-in window.
+    let window_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO checkin_windows
+             (id, school_id, title, opens_at, closes_at, allow_late, active, created_at)
+         VALUES ($1, $2, $3,
+                 NOW() - INTERVAL '1 hour',
+                 NOW() + INTERVAL '1 hour',
+                 FALSE, TRUE, NOW())",
+    )
+    .bind(window_id)
+    .bind(school_id)
+    .bind(format!("E2E Window {}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed window");
+
+    // Seed users.
+    let student_name = format!("e2e_ci_student_{}", suffix);
+    let admin_name = format!("e2e_ci_admin_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
+    // Assign student to school.
+    sqlx::query(
+        "INSERT INTO user_school_assignments (user_id, school_id, assignment_type, assigned_at)
+         VALUES ($1, $2, 'student', NOW()) ON CONFLICT DO NOTHING",
+    )
+    .bind(student_id)
+    .bind(school_id)
+    .execute(&pool)
+    .await
+    .expect("assign student to school");
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    // Student submits check-in.
+    let student_token = login_token(&app, &student_name).await;
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "student submit must return 201");
+    let sub_body: serde_json::Value = read_body_json(resp).await;
+    let submission_id = sub_body["submission_id"].as_str().expect("submission_id missing");
+    assert_eq!(sub_body["status"], "pending", "initial status must be pending");
+
+    // Admin approves the submission.
+    let admin_token = login_token(&app, &admin_name).await;
+    let req = TestRequest::post()
+        .uri(&format!(
+            "/api/v1/check-ins/windows/{}/submissions/{}/decide",
+            window_id, submission_id
+        ))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "decision": "approved" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin approve must return 200");
+    let dec_body: serde_json::Value = read_body_json(resp).await;
+    assert_eq!(dec_body["decision"], "approved");
+
+    // Verify decision recorded in DB.
+    let decision: String = sqlx::query_scalar(
+        "SELECT decision FROM checkin_approval_decisions WHERE submission_id = $1",
+    )
+    .bind(Uuid::parse_str(submission_id).unwrap())
+    .fetch_one(&pool)
+    .await
+    .expect("decision row missing");
+    assert_eq!(decision, "approved", "DB must record decision as 'approved'");
+
+    // Verify student received a notification.
+    let notif_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notifications WHERE recipient_id = $1 AND notification_type = 'checkin'",
+    )
+    .bind(student_id)
+    .fetch_one(&pool)
+    .await
+    .expect("notification count query failed");
+    assert!(notif_count >= 1, "student must receive at least one checkin notification");
+}
+
+// ---------------------------------------------------------------------------
+// E2E: order placement → admin fulfilment → student notification
+// ---------------------------------------------------------------------------
+
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_order_placement_and_fulfillment_chain() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let student_name = format!("e2e_ord_student_{}", suffix);
+    let admin_name = format!("e2e_ord_admin_{}", suffix);
+
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let admin_token = login_token(&app, &admin_name).await;
+    let student_token = login_token(&app, &student_name).await;
+
+    // Admin creates a product.
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({
+            "name": format!("Test Product {}", suffix),
+            "description": "E2E test product",
+            "price_cents": 1000,
+            "initial_quantity": 50
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "admin create product must return 201");
+    let prod_body: serde_json::Value = read_body_json(resp).await;
+    let product_id = prod_body["id"].as_str().expect("product id missing");
+
+    // Student places an order.
+    let req = TestRequest::post()
+        .uri("/api/v1/orders")
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({
+            "items": [{ "product_id": product_id, "quantity": 1 }]
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "student place order must return 201");
+    let ord_body: serde_json::Value = read_body_json(resp).await;
+    // create_order returns OrderDetailResponse which flattens OrderSummaryRow — field is "id"
+    let order_id = ord_body["id"].as_str().expect("order id missing");
+    assert_eq!(ord_body["status"], "pending", "new order must be pending");
+
+    // Admin updates order to 'fulfilled'.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/orders/{}/status", order_id))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "status": "fulfilled" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin fulfill order must return 200");
+    let update_body: serde_json::Value = read_body_json(resp).await;
+    assert_eq!(update_body["new_status"], "fulfilled");
+    assert_eq!(update_body["old_status"], "pending");
+
+    // Verify student received an order notification.
+    let notif_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM notifications WHERE recipient_id = $1 AND notification_type = 'order'",
+    )
+    .bind(student_id)
+    .fetch_one(&pool)
+    .await
+    .expect("notification count query failed");
+    assert!(notif_count >= 1, "student must receive at least one order notification after fulfillment");
+}
+
+// ---------------------------------------------------------------------------
+// E2E: campaign toggle affects order shipping fee
+// ---------------------------------------------------------------------------
+
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_campaign_toggle_affects_order_shipping() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let student_name = format!("e2e_camp_student_{}", suffix);
+    let admin_name = format!("e2e_camp_admin_{}", suffix);
+
+    seed_user(&pool, &student_name, "Student").await;
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let admin_token = login_token(&app, &admin_name).await;
+    let student_token = login_token(&app, &student_name).await;
+
+    // Admin creates a product for ordering.
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({
+            "name": format!("Camp Product {}", suffix),
+            "description": "campaign test product",
+            "price_cents": 500,
+            "initial_quantity": 100
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "product creation must succeed");
+    let prod_body: serde_json::Value = read_body_json(resp).await;
+    let product_id = prod_body["id"].as_str().expect("product id missing");
+
+    // --- Phase 1: enable free_shipping ---
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/config/campaigns/free_shipping")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "enabled": true }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "enable free_shipping must return 200");
+
+    // Student places order while free_shipping is active.
+    let req = TestRequest::post()
+        .uri("/api/v1/orders")
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({
+            "items": [{ "product_id": product_id, "quantity": 1 }]
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "order with free_shipping must return 201");
+    let free_order: serde_json::Value = read_body_json(resp).await;
+    assert_eq!(
+        free_order["shipping_fee_cents"], 0,
+        "shipping_fee_cents must be 0 when free_shipping campaign is enabled"
+    );
+
+    // --- Phase 2: disable free_shipping ---
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/config/campaigns/free_shipping")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "enabled": false }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "disable free_shipping must return 200");
+
+    // Student places another order — shipping fee must be non-zero.
+    let req = TestRequest::post()
+        .uri("/api/v1/orders")
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({
+            "items": [{ "product_id": product_id, "quantity": 1 }]
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "order without free_shipping must return 201");
+    let paid_order: serde_json::Value = read_body_json(resp).await;
+    assert!(
+        paid_order["shipping_fee_cents"].as_i64().unwrap_or(0) > 0,
+        "shipping_fee_cents must be > 0 when free_shipping campaign is disabled"
+    );
 }

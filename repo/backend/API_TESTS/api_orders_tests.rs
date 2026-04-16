@@ -692,3 +692,111 @@ async fn test_admin_kpi_requires_auth() {
     let body: Value = read_body_json(resp).await;
     assert!(body["error"].is_string(), "401 must include an error field");
 }
+
+// ---------------------------------------------------------------------------
+// Admin order detail endpoint
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/admin/orders/{id} returns the full order detail shape:
+/// flattened order summary (id, status, total_cents, shipping_fee_cents,
+/// points_earned) plus an items array.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_get_order_by_id_returns_correct_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("adm_ord_detail_admin_{}", suffix);
+    let student_name = format!("adm_ord_detail_student_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+    seed_user(&pool, &student_name, "Student").await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let admin_token = login_token(&app, &admin_name).await;
+    let student_token = login_token(&app, &student_name).await;
+
+    // Admin creates a product.
+    let product_id = {
+        let req = TestRequest::post()
+            .uri("/api/v1/admin/products")
+            .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+            .set_json(serde_json::json!({
+                "name": format!("Detail Prod {}", suffix),
+                "price_cents": 750,
+                "initial_quantity": 50
+            }))
+            .to_request();
+        let body: Value = read_body_json(call_service(&app, req).await).await;
+        body["id"].as_str().expect("product id").to_string()
+    };
+
+    // Student places an order.
+    let order_id = {
+        let req = TestRequest::post()
+            .uri("/api/v1/orders")
+            .insert_header(("Authorization", format!("Bearer {}", student_token)))
+            .set_json(serde_json::json!({
+                "items": [{ "product_id": product_id, "quantity": 2 }]
+            }))
+            .to_request();
+        let body: Value = read_body_json(call_service(&app, req).await).await;
+        body["id"].as_str().expect("order id").to_string()
+    };
+
+    // Admin retrieves the order by ID.
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/admin/orders/{}", order_id))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "GET /admin/orders/{{id}} must return 200");
+    let body: Value = read_body_json(resp).await;
+
+    assert_eq!(body["id"].as_str().unwrap(), order_id, "order.id must match");
+    assert_eq!(body["status"], "pending", "freshly created order must be pending");
+    assert!(body["total_cents"].is_number(), "order.total_cents must be number");
+    assert!(body["shipping_fee_cents"].is_number(), "order.shipping_fee_cents must be number");
+    assert!(body["points_earned"].is_number(), "order.points_earned must be number");
+    assert!(body["created_at"].is_string(), "order.created_at must be string");
+
+    let items = body["items"].as_array().expect("order.items must be array");
+    assert!(!items.is_empty(), "order must have at least one item");
+    let item = &items[0];
+    assert!(item["product_id"].is_string(), "item.product_id must be string");
+    assert!(item["product_name"].is_string(), "item.product_name must be string");
+    assert_eq!(item["quantity"], 2, "item.quantity must match");
+    assert!(item["unit_price_cents"].is_number(), "item.unit_price_cents must be number");
+    assert!(item["subtotal_cents"].is_number(), "item.subtotal_cents must be number");
+}
+
+/// GET /api/v1/admin/orders/{id} for a nonexistent order returns 404.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_get_nonexistent_order_returns_404() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("adm_ord_404_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let ghost_id = Uuid::new_v4();
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/admin/orders/{}", ghost_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 404, "nonexistent order must return 404");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "404 must include an error field");
+}

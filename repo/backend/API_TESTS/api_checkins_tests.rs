@@ -474,3 +474,340 @@ async fn test_decide_submission_requires_auth() {
     let body: Value = read_body_json(resp).await;
     assert!(body["error"].is_string(), "401 must include an error field");
 }
+
+// ---------------------------------------------------------------------------
+// Helpers for school-infrastructure seeding
+// ---------------------------------------------------------------------------
+
+/// Seeds district → campus → school and returns the school UUID.
+async fn seed_school(pool: &PgPool, suffix: &str) -> Uuid {
+    let district_id = Uuid::new_v4();
+    let campus_id = Uuid::new_v4();
+    let school_id = Uuid::new_v4();
+
+    sqlx::query(
+        "INSERT INTO districts (id, name, state, created_at)
+         VALUES ($1, $2, 'TX', NOW())",
+    )
+    .bind(district_id)
+    .bind(format!("Test District {}", suffix))
+    .execute(pool)
+    .await
+    .expect("seed district failed");
+
+    sqlx::query(
+        "INSERT INTO campuses (id, district_id, name, created_at)
+         VALUES ($1, $2, $3, NOW())",
+    )
+    .bind(campus_id)
+    .bind(district_id)
+    .bind(format!("Test Campus {}", suffix))
+    .execute(pool)
+    .await
+    .expect("seed campus failed");
+
+    sqlx::query(
+        "INSERT INTO schools (id, campus_id, name, school_type, created_at)
+         VALUES ($1, $2, $3, 'general', NOW())",
+    )
+    .bind(school_id)
+    .bind(campus_id)
+    .bind(format!("Test School {}", suffix))
+    .execute(pool)
+    .await
+    .expect("seed school failed");
+
+    school_id
+}
+
+/// Seeds an open check-in window (opens_at = now - 1h, closes_at = now + 1h) for the school.
+async fn seed_open_window(pool: &PgPool, school_id: Uuid, suffix: &str) -> Uuid {
+    let window_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO checkin_windows
+             (id, school_id, title, opens_at, closes_at, allow_late, active, created_at)
+         VALUES ($1, $2, $3,
+                 NOW() - INTERVAL '1 hour',
+                 NOW() + INTERVAL '1 hour',
+                 FALSE, TRUE, NOW())",
+    )
+    .bind(window_id)
+    .bind(school_id)
+    .bind(format!("Test Window {}", suffix))
+    .execute(pool)
+    .await
+    .expect("seed window failed");
+    window_id
+}
+
+/// Assigns a user to a school directly via user_school_assignments.
+async fn assign_user_to_school(pool: &PgPool, user_id: Uuid, school_id: Uuid) {
+    sqlx::query(
+        "INSERT INTO user_school_assignments (user_id, school_id, assignment_type, assigned_at)
+         VALUES ($1, $2, 'student', NOW())
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(school_id)
+    .execute(pool)
+    .await
+    .expect("assign user to school failed");
+}
+
+// ---------------------------------------------------------------------------
+// Happy-path: submit → decide
+// ---------------------------------------------------------------------------
+
+/// Full submit→approve cycle: seed school infrastructure, create an open window,
+/// have a student submit, then have a super-admin approve the submission.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_submit_checkin_happy_path() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let window_id = seed_open_window(&pool, school_id, suffix).await;
+
+    let student_name = format!("ci_happy_student_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    assign_user_to_school(&pool, student_id, school_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &student_name).await;
+
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "method": "qr_code" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "student submit must return 201");
+    let body: Value = read_body_json(resp).await;
+
+    assert!(body["submission_id"].is_string(), "response must include submission_id");
+    assert_eq!(
+        body["window_id"].as_str().unwrap(),
+        window_id.to_string(),
+        "response window_id must match the submitted window"
+    );
+    assert!(body["window_title"].is_string(), "response must include window_title");
+    assert_eq!(
+        body["student_id"].as_str().unwrap(),
+        student_id.to_string(),
+        "response student_id must match the submitting student"
+    );
+    assert_eq!(body["is_late"], false, "on-time submission must have is_late = false");
+    assert_eq!(body["status"], "pending", "initial submission status must be 'pending'");
+}
+
+/// Re-submitting to the same window returns 409.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_submit_checkin_duplicate_returns_409() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let window_id = seed_open_window(&pool, school_id, suffix).await;
+
+    let student_name = format!("ci_dup_student_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    assign_user_to_school(&pool, student_id, school_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &student_name).await;
+
+    // First submission must succeed.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "first submission must succeed");
+
+    // Second submission to the same window must be rejected.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 409, "duplicate submission must return 409");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "409 must include an error field");
+}
+
+/// Approve a submission: admin calls decide with "approved" and gets correct shape back.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_decide_submission_approved_returns_correct_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let window_id = seed_open_window(&pool, school_id, suffix).await;
+
+    let student_name = format!("ci_dec_student_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    assign_user_to_school(&pool, student_id, school_id).await;
+
+    let admin_name = format!("ci_dec_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    // Student submits.
+    let student_token = login_token(&app, &student_name).await;
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let sub_body: Value = read_body_json(call_service(&app, req).await).await;
+    let submission_id = sub_body["submission_id"].as_str().expect("submission_id missing");
+
+    // Admin approves.
+    let admin_token = login_token(&app, &admin_name).await;
+    let req = TestRequest::post()
+        .uri(&format!(
+            "/api/v1/check-ins/windows/{}/submissions/{}/decide",
+            window_id, submission_id
+        ))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "decision": "approved" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin approve must return 200");
+    let body: Value = read_body_json(resp).await;
+
+    assert_eq!(
+        body["submission_id"].as_str().unwrap(),
+        submission_id,
+        "decide response must echo back submission_id"
+    );
+    assert_eq!(body["decision"], "approved", "decision must be 'approved'");
+    assert!(body["decided_by"].is_string(), "decide response must include decided_by");
+    assert!(body["decided_at"].is_string(), "decide response must include decided_at");
+}
+
+/// Reject without reason returns 422.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_decide_rejection_without_reason_returns_422() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let window_id = seed_open_window(&pool, school_id, suffix).await;
+
+    let student_name = format!("ci_rej_student_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    assign_user_to_school(&pool, student_id, school_id).await;
+
+    let admin_name = format!("ci_rej_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    // Student submits.
+    let student_token = login_token(&app, &student_name).await;
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let sub_body: Value = read_body_json(call_service(&app, req).await).await;
+    let submission_id = sub_body["submission_id"].as_str().expect("submission_id missing");
+
+    // Admin tries to reject without providing a reason.
+    let admin_token = login_token(&app, &admin_name).await;
+    let req = TestRequest::post()
+        .uri(&format!(
+            "/api/v1/check-ins/windows/{}/submissions/{}/decide",
+            window_id, submission_id
+        ))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "decision": "rejected" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 422, "reject without reason must return 422");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "422 must include an error field");
+}
+
+/// GET /api/v1/check-ins/windows/{id}/submissions by admin returns an array
+/// with the expected per-submission fields.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_list_submissions_by_admin_returns_array_with_fields() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let window_id = seed_open_window(&pool, school_id, suffix).await;
+
+    let student_name = format!("ci_list_student_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    assign_user_to_school(&pool, student_id, school_id).await;
+
+    let admin_name = format!("ci_list_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    // Student submits so the list is non-empty.
+    let student_token = login_token(&app, &student_name).await;
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submit", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "student submit must succeed before listing");
+
+    // Admin lists submissions.
+    let admin_token = login_token(&app, &admin_name).await;
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/check-ins/windows/{}/submissions", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin list submissions must return 200");
+    let body: Value = read_body_json(resp).await;
+    let items = body.as_array().expect("submissions response must be a JSON array");
+    assert!(!items.is_empty(), "submissions list must be non-empty after student submits");
+
+    for item in items {
+        assert!(item["id"].is_string(), "submission.id must be string");
+        assert!(item["student_id"].is_string(), "submission.student_id must be string");
+        assert!(item["submitted_at"].is_string(), "submission.submitted_at must be string");
+        assert!(item["is_late"].is_boolean(), "submission.is_late must be boolean");
+    }
+}

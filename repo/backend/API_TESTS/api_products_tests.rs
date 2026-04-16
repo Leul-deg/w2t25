@@ -261,6 +261,244 @@ async fn test_admin_product_list_includes_inventory_fields() {
     }
 }
 
+/// POST /api/v1/admin/products returns 201 with a complete product shape
+/// including the seeded inventory quantity.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_create_product_returns_correct_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("prod_create_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &admin_name, "password": "TestPass2024!!" }))
+        .to_request();
+    let admin_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = admin_body["token"].as_str().unwrap().to_string();
+
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "name": format!("Shape Test {}", suffix),
+            "description": "unit test product",
+            "price_cents": 1299,
+            "sku": format!("SKU-SHAPE-{}", suffix),
+            "initial_quantity": 30
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "admin create product must return 201");
+    let body: Value = read_body_json(resp).await;
+
+    assert!(body["id"].is_string(), "product.id must be string");
+    assert_eq!(body["name"], format!("Shape Test {}", suffix), "product.name must match");
+    assert_eq!(body["price_cents"], 1299, "product.price_cents must match");
+    assert_eq!(body["active"], true, "newly created product must be active");
+    assert_eq!(body["quantity"], 30, "quantity must reflect initial_quantity");
+    assert!(body["created_at"].is_string(), "product.created_at must be string");
+}
+
+/// POST /api/v1/admin/products requires auth — unauthenticated request returns 401.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_create_product_requires_auth() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .set_json(serde_json::json!({ "name": "Unauthorized", "price_cents": 100 }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "401 must include an error field");
+}
+
+/// POST /api/v1/admin/products by a non-admin returns 403.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_create_product_requires_admin_role() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let student_token =
+        seed_user_and_login(
+            &init_service(
+                App::new()
+                    .app_data(web::Data::new(pool.clone()))
+                    .configure(configure_routes),
+            )
+            .await,
+            &pool,
+            &format!("prod_norole_{}", suffix),
+            "Student",
+        )
+        .await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", student_token)))
+        .set_json(serde_json::json!({ "name": "Student Cannot Create", "price_cents": 100 }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 403, "non-admin must receive 403");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "403 must include an error field");
+}
+
+/// POST /api/v1/admin/products/{id}/update returns the updated product shape.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_update_product_returns_updated_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("prod_upd_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &admin_name, "password": "TestPass2024!!" }))
+        .to_request();
+    let admin_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = admin_body["token"].as_str().unwrap().to_string();
+
+    // Create product first.
+    let create_req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "name": format!("Before Update {}", suffix),
+            "price_cents": 500,
+            "initial_quantity": 10
+        }))
+        .to_request();
+    let create_body: Value = read_body_json(call_service(&app, create_req).await).await;
+    let product_id = create_body["id"].as_str().expect("product id missing");
+
+    // Update name and price.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/products/{}/update", product_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "name": format!("After Update {}", suffix),
+            "price_cents": 999,
+            "quantity": 25
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin update product must return 200");
+    let body: Value = read_body_json(resp).await;
+
+    assert_eq!(body["id"].as_str().unwrap(), product_id, "id must be unchanged");
+    assert_eq!(body["name"], format!("After Update {}", suffix), "name must be updated");
+    assert_eq!(body["price_cents"], 999, "price_cents must be updated");
+    assert_eq!(body["quantity"], 25, "quantity must be updated");
+    assert_eq!(body["active"], true, "active must be unchanged");
+}
+
+/// POST /api/v1/admin/products/{id}/update with a negative price returns 422.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_update_product_negative_price_returns_422() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("prod_negprice_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &admin_name, "password": "TestPass2024!!" }))
+        .to_request();
+    let admin_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = admin_body["token"].as_str().unwrap().to_string();
+
+    // Create product first.
+    let create_req = TestRequest::post()
+        .uri("/api/v1/admin/products")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "name": format!("NegPrice {}", suffix), "price_cents": 100 }))
+        .to_request();
+    let create_body: Value = read_body_json(call_service(&app, create_req).await).await;
+    let product_id = create_body["id"].as_str().expect("product id missing");
+
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/products/{}/update", product_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "price_cents": -50 }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 422, "negative price must return 422");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "422 must include an error field");
+}
+
+/// POST /api/v1/admin/products/{id}/update for a nonexistent product returns 404.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_update_nonexistent_product_returns_404() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("prod_upd404_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &admin_name, "password": "TestPass2024!!" }))
+        .to_request();
+    let admin_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = admin_body["token"].as_str().unwrap().to_string();
+
+    let ghost_id = Uuid::new_v4();
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/products/{}/update", ghost_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "name": "Ghost" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 404, "nonexistent product update must return 404");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "404 must include an error field");
+}
+
 /// Creating a product and then deactivating it must make it disappear from the
 /// public list while remaining in the admin list.
 #[actix_web::test]

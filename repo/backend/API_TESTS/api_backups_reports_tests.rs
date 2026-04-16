@@ -538,3 +538,195 @@ async fn test_get_nonexistent_report_returns_404() {
     let body: Value = read_body_json(resp).await;
     assert!(body["error"].is_string(), "404 must include an error field");
 }
+
+// ---------------------------------------------------------------------------
+// Reports — POST creation happy path
+// ---------------------------------------------------------------------------
+
+/// POST /api/v1/reports with a valid "orders" type returns 201 with the full
+/// completed-report shape: job_id, name, report_type, status, output_path,
+/// row_count, pii_masked, checksum.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_create_orders_report_returns_completed_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("rpt_create_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/reports")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "report_type": "orders",
+            "start_date": "2025-01-01",
+            "end_date": "2025-12-31",
+            "pii_masked": true
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "valid report creation must return 201");
+    let body: Value = read_body_json(resp).await;
+
+    assert!(body["job_id"].is_string(), "response must include job_id");
+    assert!(body["name"].is_string(), "response must include name");
+    assert_eq!(body["report_type"], "orders", "response report_type must match request");
+    assert_eq!(body["status"], "completed", "successfully generated report must have status 'completed'");
+    assert!(body["output_path"].is_string(), "response must include output_path");
+    assert!(body["row_count"].is_number(), "response must include row_count");
+    assert_eq!(body["pii_masked"], true, "pii_masked must reflect the request value");
+    assert!(body["checksum"].is_string(), "response must include checksum");
+}
+
+/// POST /api/v1/reports; then GET /api/v1/reports/{job_id} returns the same record.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_get_created_report_by_id_returns_correct_shape() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("rpt_getbyid_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    // Create a report first.
+    let req = TestRequest::post()
+        .uri("/api/v1/reports")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "report_type": "kpi",
+            "start_date": "2025-01-01",
+            "end_date": "2025-12-31",
+            "pii_masked": true
+        }))
+        .to_request();
+    let create_body: Value = read_body_json(call_service(&app, req).await).await;
+    let job_id = create_body["job_id"].as_str().expect("job_id missing from create response");
+
+    // Retrieve it by ID.
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/reports/{}", job_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "GET /reports/{{id}} must return 200 after creation");
+    let body: Value = read_body_json(resp).await;
+
+    assert_eq!(
+        body["id"].as_str().unwrap(),
+        job_id,
+        "retrieved report id must match job_id from create response"
+    );
+    assert!(body["name"].is_string(), "report.name must be string");
+    assert_eq!(body["report_type"], "kpi", "report_type must match");
+    assert_eq!(body["status"], "completed", "report status must be 'completed'");
+    assert!(body["pii_masked"].is_boolean(), "report.pii_masked must be boolean");
+    assert!(body["created_at"].is_string(), "report.created_at must be string");
+}
+
+// ---------------------------------------------------------------------------
+// Backups — POST creation
+// ---------------------------------------------------------------------------
+
+/// POST /api/v1/backups by an authenticated admin must NOT return 401 or 403.
+/// It returns either 201 (pg_dump available) or 500 (pg_dump not found in CI).
+/// Either outcome proves the auth layer is satisfied; we verify the 201 shape
+/// when the command succeeds.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_create_backup_auth_passes_or_internal_error() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("bk_create_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/backups")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "notes": "test backup" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+
+    let status = resp.status().as_u16();
+    assert!(
+        status != 401 && status != 403,
+        "authenticated admin must not receive 401 or 403, got {}",
+        status
+    );
+
+    if status == 201 {
+        let body: Value = read_body_json(resp).await;
+        assert!(body["backup_id"].is_string(), "backup_id must be string on 201");
+        assert!(body["filename"].is_string(), "filename must be string on 201");
+        assert_eq!(body["status"], "completed", "status must be 'completed' on 201");
+        assert!(body["message"].is_string(), "message must be string on 201");
+        assert!(body["checksum"].is_string(), "checksum must be string on 201");
+    }
+    // status == 500 means pg_dump is unavailable in this environment — acceptable.
+}
+
+/// POST /api/v1/backups/{id}/restore on a backup with status 'pending' returns 409.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_restore_pending_backup_returns_409() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("bk_restore_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    // Seed a backup record with status 'pending' (not completed).
+    let backup_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO backup_metadata (id, filename, backup_type, status, created_at)
+         VALUES ($1, $2, 'full', 'pending', NOW())",
+    )
+    .bind(backup_id)
+    .bind(format!("backup_{}.mbak", backup_id))
+    .execute(&pool)
+    .await
+    .expect("seed pending backup failed");
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/backups/{}/restore", backup_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({}))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 409, "restoring a non-completed backup must return 409");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "409 must include an error field");
+}
