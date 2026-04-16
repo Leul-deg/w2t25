@@ -290,29 +290,30 @@ async fn test_checkin_submit_and_decide_workflow() {
     .await
     .expect("seed school");
 
+    // Seed users before the window so we can set created_by.
+    let student_name = format!("e2e_ci_student_{}", suffix);
+    let admin_name = format!("e2e_ci_admin_{}", suffix);
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
     // Open check-in window.
     let window_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO checkin_windows
-             (id, school_id, title, opens_at, closes_at, allow_late, active, created_at)
-         VALUES ($1, $2, $3,
+             (id, school_id, created_by, title, opens_at, closes_at, allow_late, active, created_at)
+         VALUES ($1, $2, $3, $4,
                  NOW() - INTERVAL '1 hour',
                  NOW() + INTERVAL '1 hour',
                  FALSE, TRUE, NOW())",
     )
     .bind(window_id)
     .bind(school_id)
+    .bind(admin_id)
     .bind(format!("E2E Window {}", suffix))
     .execute(&pool)
     .await
     .expect("seed window");
-
-    // Seed users.
-    let student_name = format!("e2e_ci_student_{}", suffix);
-    let admin_name = format!("e2e_ci_admin_{}", suffix);
-    let student_id = seed_user(&pool, &student_name, "Student").await;
-    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
-    make_super_admin(&pool, admin_id).await;
 
     // Assign student to school.
     sqlx::query(

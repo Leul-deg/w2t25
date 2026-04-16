@@ -521,18 +521,19 @@ async fn seed_school(pool: &PgPool, suffix: &str) -> Uuid {
 }
 
 /// Seeds an open check-in window (opens_at = now - 1h, closes_at = now + 1h) for the school.
-async fn seed_open_window(pool: &PgPool, school_id: Uuid, suffix: &str) -> Uuid {
+async fn seed_open_window(pool: &PgPool, school_id: Uuid, created_by: Uuid, suffix: &str) -> Uuid {
     let window_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO checkin_windows
-             (id, school_id, title, opens_at, closes_at, allow_late, active, created_at)
-         VALUES ($1, $2, $3,
+             (id, school_id, created_by, title, opens_at, closes_at, allow_late, active, created_at)
+         VALUES ($1, $2, $3, $4,
                  NOW() - INTERVAL '1 hour',
                  NOW() + INTERVAL '1 hour',
                  FALSE, TRUE, NOW())",
     )
     .bind(window_id)
     .bind(school_id)
+    .bind(created_by)
     .bind(format!("Test Window {}", suffix))
     .execute(pool)
     .await
@@ -567,10 +568,9 @@ async fn test_submit_checkin_happy_path() {
     let suffix = &Uuid::new_v4().to_string()[..8];
 
     let school_id = seed_school(&pool, suffix).await;
-    let window_id = seed_open_window(&pool, school_id, suffix).await;
-
     let student_name = format!("ci_happy_student_{}", suffix);
     let student_id = seed_user(&pool, &student_name, "Student").await;
+    let window_id = seed_open_window(&pool, school_id, student_id, suffix).await;
     assign_user_to_school(&pool, student_id, school_id).await;
 
     let app = init_service(
@@ -614,10 +614,9 @@ async fn test_submit_checkin_duplicate_returns_409() {
     let suffix = &Uuid::new_v4().to_string()[..8];
 
     let school_id = seed_school(&pool, suffix).await;
-    let window_id = seed_open_window(&pool, school_id, suffix).await;
-
     let student_name = format!("ci_dup_student_{}", suffix);
     let student_id = seed_user(&pool, &student_name, "Student").await;
+    let window_id = seed_open_window(&pool, school_id, student_id, suffix).await;
     assign_user_to_school(&pool, student_id, school_id).await;
 
     let app = init_service(
@@ -657,14 +656,12 @@ async fn test_decide_submission_approved_returns_correct_shape() {
     let suffix = &Uuid::new_v4().to_string()[..8];
 
     let school_id = seed_school(&pool, suffix).await;
-    let window_id = seed_open_window(&pool, school_id, suffix).await;
-
+    let admin_name = format!("ci_dec_admin_{}", suffix);
+    let admin_id = seed_super_admin(&pool, &admin_name).await;
+    let window_id = seed_open_window(&pool, school_id, admin_id, suffix).await;
     let student_name = format!("ci_dec_student_{}", suffix);
     let student_id = seed_user(&pool, &student_name, "Student").await;
     assign_user_to_school(&pool, student_id, school_id).await;
-
-    let admin_name = format!("ci_dec_admin_{}", suffix);
-    seed_super_admin(&pool, &admin_name).await;
 
     let app = init_service(
         App::new()
@@ -715,14 +712,12 @@ async fn test_decide_rejection_without_reason_returns_422() {
     let suffix = &Uuid::new_v4().to_string()[..8];
 
     let school_id = seed_school(&pool, suffix).await;
-    let window_id = seed_open_window(&pool, school_id, suffix).await;
-
+    let admin_name = format!("ci_rej_admin_{}", suffix);
+    let admin_id = seed_super_admin(&pool, &admin_name).await;
+    let window_id = seed_open_window(&pool, school_id, admin_id, suffix).await;
     let student_name = format!("ci_rej_student_{}", suffix);
     let student_id = seed_user(&pool, &student_name, "Student").await;
     assign_user_to_school(&pool, student_id, school_id).await;
-
-    let admin_name = format!("ci_rej_admin_{}", suffix);
-    seed_super_admin(&pool, &admin_name).await;
 
     let app = init_service(
         App::new()
@@ -766,14 +761,12 @@ async fn test_list_submissions_by_admin_returns_array_with_fields() {
     let suffix = &Uuid::new_v4().to_string()[..8];
 
     let school_id = seed_school(&pool, suffix).await;
-    let window_id = seed_open_window(&pool, school_id, suffix).await;
-
+    let admin_name = format!("ci_list_admin_{}", suffix);
+    let admin_id = seed_super_admin(&pool, &admin_name).await;
+    let window_id = seed_open_window(&pool, school_id, admin_id, suffix).await;
     let student_name = format!("ci_list_student_{}", suffix);
     let student_id = seed_user(&pool, &student_name, "Student").await;
     assign_user_to_school(&pool, student_id, school_id).await;
-
-    let admin_name = format!("ci_list_admin_{}", suffix);
-    seed_super_admin(&pool, &admin_name).await;
 
     let app = init_service(
         App::new()
@@ -805,7 +798,7 @@ async fn test_list_submissions_by_admin_returns_array_with_fields() {
     assert!(!items.is_empty(), "submissions list must be non-empty after student submits");
 
     for item in items {
-        assert!(item["id"].is_string(), "submission.id must be string");
+        assert!(item["submission_id"].is_string(), "submission.submission_id must be string");
         assert!(item["student_id"].is_string(), "submission.student_id must be string");
         assert!(item["submitted_at"].is_string(), "submission.submitted_at must be string");
         assert!(item["is_late"].is_boolean(), "submission.is_late must be boolean");
