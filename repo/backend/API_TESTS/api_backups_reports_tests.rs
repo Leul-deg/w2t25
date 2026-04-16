@@ -14,7 +14,7 @@
 /// Requires a live PostgreSQL database:
 ///   TEST_DATABASE_URL=postgres://meridian:meridian@127.0.0.1:5433/meridian_seeded?sslmode=disable \
 ///     cargo test --test api_backups_reports_tests -- --include-ignored
-use actix_web::test::{call_service, init_service, read_body_json, TestRequest};
+use actix_web::test::{call_service, init_service, read_body, read_body_json, TestRequest};
 use actix_web::{web, App};
 use meridian_backend::config::Config;
 use meridian_backend::routes::configure_routes;
@@ -688,6 +688,133 @@ async fn test_create_backup_auth_passes_or_internal_error() {
         assert!(body["checksum"].is_string(), "checksum must be string on 201");
     }
     // status == 500 means pg_dump is unavailable in this environment — acceptable.
+}
+
+// ---------------------------------------------------------------------------
+// Reports — GET /{id}/download
+// ---------------------------------------------------------------------------
+
+/// GET /api/v1/reports/{id}/download without auth returns 401.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_download_report_requires_auth() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/reports/{}/download", Uuid::new_v4()))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "401 must include an error field");
+}
+
+/// GET /api/v1/reports/{id}/download with a non-existent ID returns 404.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_download_nonexistent_report_returns_404() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("rpt_dl_404_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/reports/{}/download", Uuid::new_v4()))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 404);
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "404 must include an error field");
+}
+
+/// Create a report then download it — response must be text/csv with non-empty content
+/// and a Content-Disposition: attachment header.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_download_completed_report_returns_csv() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let admin_name = format!("rpt_dl_admin_{}", suffix);
+    seed_super_admin(&pool, &admin_name).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    // Create the report first.
+    let req = TestRequest::post()
+        .uri("/api/v1/reports")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({
+            "report_type": "orders",
+            "start_date": "2025-01-01",
+            "end_date": "2025-12-31",
+            "pii_masked": true
+        }))
+        .to_request();
+    let create_body: Value = read_body_json(call_service(&app, req).await).await;
+    let job_id = create_body["job_id"].as_str().expect("job_id missing from create response");
+    assert_eq!(
+        create_body["status"], "completed",
+        "report must reach completed status before download"
+    );
+
+    // Download it.
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/reports/{}/download", job_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "download must return 200");
+
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .expect("Content-Type header must be present")
+        .to_str()
+        .unwrap();
+    assert!(
+        content_type.contains("text/csv"),
+        "Content-Type must be text/csv, got {}",
+        content_type
+    );
+
+    let content_disp = resp
+        .headers()
+        .get("content-disposition")
+        .expect("Content-Disposition header must be present")
+        .to_str()
+        .unwrap();
+    assert!(
+        content_disp.contains("attachment"),
+        "Content-Disposition must indicate attachment, got {}",
+        content_disp
+    );
+
+    let body_bytes = read_body(resp).await;
+    assert!(!body_bytes.is_empty(), "CSV download body must not be empty");
 }
 
 /// POST /api/v1/backups/{id}/restore on a backup with status 'pending' returns 409.

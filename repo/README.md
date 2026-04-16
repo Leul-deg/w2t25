@@ -248,7 +248,7 @@ cargo test
 cargo check --target wasm32-unknown-unknown
 ```
 
-### Verified test run results (2026-04-03)
+### Verified test run results (2026-04-16)
 
 All ignored DB tests were executed against a live PostgreSQL 16 instance with
 migrations 001–015 applied and seed data loaded.  Results:
@@ -260,6 +260,18 @@ migrations 001–015 applied and seed data loaded.  Results:
 | `commerce_tests` | `--include-ignored --test-threads=1` | **25/25 pass** |
 | `admin_scope_tests` | `--include-ignored` | **24/24 pass** |
 | binary (`meridian-backend`) | `--include-ignored` | **151/151 pass** (includes 8 admin HTTP scope tests) |
+| `api_authorization_tests` | `--include-ignored` | **6/6 pass** |
+| `api_auth_payload_tests` | `--include-ignored` | **10/10 pass** |
+| `api_products_tests` | `--include-ignored` | **11/11 pass** |
+| `api_orders_tests` | `--include-ignored` | **17/17 pass** |
+| `api_checkins_tests` | `--include-ignored` | **17/17 pass** |
+| `api_backups_reports_tests` | `--include-ignored` | **19/19 pass** |
+| `api_notifications_payload_tests` | `--include-ignored` | **9/9 pass** |
+| `api_admin_users_payload_tests` | `--include-ignored` | **7/7 pass** |
+| `api_config_tests` | `--include-ignored` | **14/14 pass** |
+| `api_logs_tests` | `--include-ignored` | **11/11 pass** |
+| `api_users_tests` | `--include-ignored` | **9/9 pass** |
+| `e2e_workflow_tests` | `--include-ignored` | **5/5 pass** |
 
 Note: `commerce_tests` requires `--test-threads=1` because `test_config_versioning`
 mutates `shipping_fee_cents` and restores it; concurrent execution races with
@@ -442,7 +454,7 @@ curl -s -X POST http://localhost:8080/api/v1/reports \
     "end_date": "2026-03-31",
     "pii_masked": true
   }' | jq .
-# Expected: {"id":"...","status":"completed","path":"..."}
+# Expected: {"job_id":"...","name":"...","report_type":"orders","status":"completed","output_path":"...","row_count":0,"pii_masked":true,"checksum":"...","download_url":"/api/v1/reports/.../download"}
 ```
 
 **Generate an unmasked orders report (requires pii_export permission):**
@@ -700,5 +712,5 @@ PII masking is **ON by default**. To disable it, a user must:
 | `list_deletion_requests` scoped filtering | `routes::admin::tests::test_list_deletion_requests_scoped_by_campus` — DB test, runs in CI |
 | `admin_list_orders` scoped filtering | `routes::admin::tests::test_list_orders_scoped_by_campus` — DB test, runs in CI |
 | Frontend role/navigation helpers | Unit tests in `app.rs`, `components/nav.rs`, `pages/home/admin.rs`, `pages/admin_users.rs`, `pages/admin_deletion_requests.rs`, and `api/client.rs` |
-| API authorization for reports/backups | `backend/tests/api_authorization_tests.rs` — DB-backed HTTP tests |
-| Multi-step API workflows | `backend/tests/e2e_workflow_tests.rs` — DB-backed end-to-end API tests |
+| API authorization for reports/backups | `backend/API_TESTS/api_authorization_tests.rs` — DB-backed HTTP tests |
+| Multi-step API workflows | `backend/e2e_tests/e2e_workflow_tests.rs` — DB-backed end-to-end API tests |

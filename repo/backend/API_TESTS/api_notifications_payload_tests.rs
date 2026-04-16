@@ -357,3 +357,62 @@ async fn test_mark_read_is_idempotent() {
     let body2: Value = read_body_json(resp2).await;
     assert_eq!(body2["message"], "Marked as read.");
 }
+
+// ---------------------------------------------------------------------------
+// POST /notifications/reminders/generate
+// ---------------------------------------------------------------------------
+
+/// POST /api/v1/notifications/reminders/generate without auth returns 401.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_generate_reminders_requires_auth() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/notifications/reminders/generate")
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 401);
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "401 must include an error field");
+}
+
+/// POST /api/v1/notifications/reminders/generate for an authenticated Student
+/// returns 200 with a numeric `generated` field.
+/// No active windows exist in this test database so generated=0; the shape is
+/// what matters here.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_generate_reminders_returns_generated_count() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let username = format!("reminders_student_{}", suffix);
+    seed_user(&pool, &username, "Student").await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &username).await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/notifications/reminders/generate")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "generate reminders must return 200");
+    let body: Value = read_body_json(resp).await;
+    assert!(
+        body["generated"].is_number(),
+        "response must include a numeric 'generated' field, got: {}",
+        body
+    );
+}

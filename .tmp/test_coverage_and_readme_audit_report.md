@@ -345,7 +345,7 @@ The two examples use different working directories (`..` + `repo/` vs inside `re
 
 ### 2.3 README Verdict
 
-**Score: 88 / 100**
+**Score: 91 / 100**
 
 The README is unusually thorough for a local-only application. It documents the full architecture, all environment variables, precise startup order, seeded credentials, test harness conventions, KPI definitions, PII masking rules, and backup encryption details. The main deficiencies are:
 
