@@ -13,21 +13,24 @@ integrated merchandise store, and reporting/admin workflow.
 meridian/
 ├── backend/          Actix-web REST API
 │   ├── src/
+│   │   ├── lib.rs            Library root (exposes modules for integration tests)
 │   │   ├── main.rs           Server entry point + scheduler spawn
 │   │   ├── config.rs         Environment config loader
 │   │   ├── db.rs             Connection pool + migration runner
 │   │   ├── errors.rs         Typed AppError with HTTP mapping
-│   │   ├── middleware/       Auth extraction helpers
+│   │   ├── middleware/       Auth extraction helpers + scope enforcement
 │   │   ├── models/           User, Role, Session structs
 │   │   ├── routes/           API handlers
-│   │   │   ├── auth.rs       Login, logout, me
-│   │   │   ├── admin.rs      Admin console (products, orders, users, KPI)
-│   │   │   ├── products.rs   Public product listing
+│   │   │   ├── auth.rs       Login, logout, me, verify (quick-lock)
+│   │   │   ├── admin.rs      Admin console (products, orders, users, KPI, scope)
+│   │   │   ├── products.rs   Public product listing + admin CRUD
 │   │   │   ├── orders.rs     Customer order creation and history
 │   │   │   ├── config_routes.rs  Config values and campaign toggles
 │   │   │   ├── reports.rs    Report generation and download
 │   │   │   ├── logs.rs       Audit, access, and error log viewer
-│   │   │   └── backups.rs    Encrypted backup and restore preparation
+│   │   │   ├── backups.rs    Encrypted backup and restore preparation
+│   │   │   ├── notifications.rs  In-app inbox and reminder generation
+│   │   │   └── preferences.rs    Notification preferences (DND, frequency)
 │   │   └── services/         Business logic
 │   │       ├── auth.rs       Password hashing (Argon2id)
 │   │       ├── backup.rs     AES-256-GCM encrypt/decrypt + pg_dump
@@ -35,26 +38,37 @@ meridian/
 │   │       ├── masking.rs    PII masking + pii_export permission check
 │   │       ├── reports.rs    CSV generation for all report types
 │   │       ├── scheduler.rs  Background job runner (auto-close, prune, reports)
-│   │       └── notifications.rs  Notification helpers
+│   │       └── notifications.rs  Notification helpers + preference-aware delivery
 │   ├── tests/
-│   │   ├── commerce_tests.rs  Commerce + order behavior tests
-│   │   └── hardening_tests.rs Reporting, PII, backup, retention tests
+│   │   ├── admin_scope_tests.rs   Campus-scope admin isolation tests
+│   │   ├── commerce_tests.rs      Commerce + order behavior tests
+│   │   ├── hardening_tests.rs     Reporting, PII, backup, retention tests
+│   │   └── schema_integrity_tests.rs  Migration clean-state + lockout semantics
 │   └── bin/seed.rs           Seed runner binary
 ├── frontend/         Yew WASM SPA
 │   ├── index.html            HTML shell + inline CSS
 │   └── src/
-│       ├── app.rs            Root component, context, token hydration
+│       ├── app.rs            Root component, context, route switching
 │       ├── router.rs         Client-side routes
 │       ├── state.rs          AppState + UserPublic types
-│       ├── api/              HTTP client wrappers (auth, store)
-│       ├── components/       Nav + Layout
+│       ├── api/              HTTP client wrappers (auth, store, admin_ops)
+│       ├── components/       Nav + Layout + QuickLock
 │       └── pages/            All UI pages
-│           ├── store.rs      Product grid, cart, checkout
-│           ├── orders.rs     Order history + detail
-│           ├── admin_products.rs  Product management
+│           ├── store.rs           Product grid, cart, checkout
+│           ├── orders.rs          Order history + detail
+│           ├── checkin.rs         Student/parent check-in dashboard
+│           ├── checkin_review.rs  Teacher/staff review queue
+│           ├── inbox.rs           In-app notification inbox
+│           ├── preferences.rs     Notification preference settings
+│           ├── admin_products.rs  Product management + inventory
 │           ├── admin_orders.rs    Order management + dashboard
 │           ├── admin_config.rs    Config values + campaigns + history
-│           └── admin_kpi.rs       KPI dashboard
+│           ├── admin_kpi.rs       KPI dashboard
+│           ├── admin_reports.rs   Report generation and export
+│           ├── admin_backups.rs   Encrypted backup and restore
+│           ├── admin_logs.rs      Audit, access, error log viewer
+│           ├── admin_users.rs     User management + account state
+│           └── admin_deletion_requests.rs  Deletion request approvals
 ├── migrations/       SQLx migration files (001…015)
 ├── seeds/            Reference seed SQL (authoritative: bin/seed.rs)
 ├── exports/          Report CSV output directory (gitignored)
@@ -248,30 +262,19 @@ cargo test
 cargo check --target wasm32-unknown-unknown
 ```
 
-### Verified test run results (2026-04-16)
+### Verified test run results
 
-All ignored DB tests were executed against a live PostgreSQL 16 instance with
-migrations 001–015 applied and seed data loaded.  Results:
+All ignored DB tests can be verified by running `repo/run_tests.sh` with a live
+PostgreSQL instance (or via the bundled Docker Compose database). The checked-in
+test suites that are executed are:
 
-| Suite | Command | Result |
-|---|---|---|
-| `schema_integrity_tests` | `--include-ignored --test-threads=1` | **3/3 pass** |
-| `hardening_tests` | `--include-ignored` | **53/53 pass** |
-| `commerce_tests` | `--include-ignored --test-threads=1` | **25/25 pass** |
-| `admin_scope_tests` | `--include-ignored` | **24/24 pass** |
-| binary (`meridian-backend`) | `--include-ignored` | **151/151 pass** (includes 8 admin HTTP scope tests) |
-| `api_authorization_tests` | `--include-ignored` | **6/6 pass** |
-| `api_auth_payload_tests` | `--include-ignored` | **10/10 pass** |
-| `api_products_tests` | `--include-ignored` | **11/11 pass** |
-| `api_orders_tests` | `--include-ignored` | **17/17 pass** |
-| `api_checkins_tests` | `--include-ignored` | **17/17 pass** |
-| `api_backups_reports_tests` | `--include-ignored` | **19/19 pass** |
-| `api_notifications_payload_tests` | `--include-ignored` | **9/9 pass** |
-| `api_admin_users_payload_tests` | `--include-ignored` | **7/7 pass** |
-| `api_config_tests` | `--include-ignored` | **14/14 pass** |
-| `api_logs_tests` | `--include-ignored` | **11/11 pass** |
-| `api_users_tests` | `--include-ignored` | **9/9 pass** |
-| `e2e_workflow_tests` | `--include-ignored` | **5/5 pass** |
+| Suite | Notes |
+|---|---|
+| `schema_integrity_tests` | Migration clean-state + lockout semantics; `--test-threads=1` required |
+| `hardening_tests` | Reporting, PII masking, backup encryption, retention |
+| `commerce_tests` | Order creation, shipping fee, points, config versioning; `--test-threads=1` required |
+| `admin_scope_tests` | Super-admin flag, scoped-by-default, campus isolation |
+| binary (`meridian-backend`) | Auth, check-in, admin HTTP scope, preferences, notifications |
 
 Note: `commerce_tests` requires `--test-threads=1` because `test_config_versioning`
 mutates `shipping_fee_cents` and restores it; concurrent execution races with
@@ -372,7 +375,7 @@ curl -s -X POST http://localhost:8080/api/v1/orders \
   -H "Content-Type: application/json" \
   -d '{
     "items": [{"product_id": "PRODUCT_ID", "quantity": 1}],
-    "shipping_address": "123 Main St"
+    "notes": "optional order note"
   }' | jq .
 # Expected: order object with status "pending", shipping_fee_cents=695, points_earned
 ```
@@ -593,8 +596,13 @@ curl -o /dev/null -w "%{http_code}\n" -s http://localhost:8080/api/v1/backups \
 7. Navigate to **Admin → Orders** — dashboard tiles + order table + status updates; auto-refreshes every 30 seconds.
 8. Navigate to **Admin → Config** — Config Values tab, Campaigns tab, Change History tab.
 9. Navigate to **Admin → KPIs** — six KPI cards.
-10. Log out — token cleared, redirected to login.
-11. Log in as `student_alex` — Student dashboard; no admin links in nav.
+10. Navigate to **Admin → Users** — list all users with role/state; change account state.
+11. Navigate to **Admin → Deletions** — review and approve/reject pending deletion requests.
+12. Navigate to **Admin → Reports** — generate masked or unmasked CSV exports by date range.
+13. Navigate to **Admin → Backups** — create encrypted backup; prepare restore artifact.
+14. Navigate to **Admin → Logs** — view audit, access, and error logs; trigger manual prune.
+15. Log out — token cleared, redirected to login.
+16. Log in as `student_alex` — Student dashboard; no admin links in nav.
 
 ---
 
@@ -603,7 +611,7 @@ curl -o /dev/null -w "%{http_code}\n" -s http://localhost:8080/api/v1/backups \
 | Metric | Definition |
 |---|---|
 | `daily_sales_cents` | Sum of `total_cents` for orders with `status IN ('confirmed','fulfilled')` placed today |
-| `average_order_value_cents` | `daily_sales_cents / orders_today` (0 if no orders today) |
+| `average_order_value_cents` | `AVG(total_cents)` for `confirmed`/`fulfilled` orders in the last 30 days (0 if none) |
 | `repeat_purchase_rate_pct` | `(repeat_buyers_last_30d / buyers_last_30d) * 100` (0 if no buyers) |
 | `orders_last_30d` | Count of confirmed/fulfilled orders in the last 30 days |
 | `buyers_last_30d` | Count of distinct customers with confirmed/fulfilled orders in the last 30 days |
@@ -672,7 +680,8 @@ PII masking is **ON by default**. To disable it, a user must:
 - ✅ Logs: audit, access, error log viewer with date/level filtering; 180-day retention
 - ✅ Audit trail: all state-changing operations logged to `audit_logs`
 - ✅ Background scheduler: auto-close unpaid orders after 30 min
-- ✅ Frontend: store, orders, admin products/orders/config/kpi pages
+- ✅ Admin: user management (account state changes) and deletion-request approvals
+- ✅ Frontend: store, orders, check-in, inbox, preferences; admin products/orders/config/kpi/reports/backups/logs/users/deletions
 
 ---
 
@@ -711,6 +720,6 @@ PII masking is **ON by default**. To disable it, a user must:
 | `list_users` scoped filtering | `routes::admin::tests::test_list_users_scoped_by_campus` — DB test, runs in CI |
 | `list_deletion_requests` scoped filtering | `routes::admin::tests::test_list_deletion_requests_scoped_by_campus` — DB test, runs in CI |
 | `admin_list_orders` scoped filtering | `routes::admin::tests::test_list_orders_scoped_by_campus` — DB test, runs in CI |
-| Frontend role/navigation helpers | Unit tests in `app.rs`, `components/nav.rs`, `pages/home/admin.rs`, `pages/admin_users.rs`, `pages/admin_deletion_requests.rs`, and `api/client.rs` |
-| API authorization for reports/backups | `backend/API_TESTS/api_authorization_tests.rs` — DB-backed HTTP tests |
-| Multi-step API workflows | `backend/e2e_tests/e2e_workflow_tests.rs` — DB-backed end-to-end API tests |
+| Frontend role/navigation helpers | Unit tests in `app.rs`, `pages/home/admin.rs`, `pages/admin_users.rs`, `pages/admin_deletion_requests.rs`, and `api/client.rs` |
+| Scoped-admin blocked from global products/config | `routes::admin::tests::test_scoped_admin_blocked_from_global_product_list`, `test_scoped_admin_blocked_from_global_config_reads` — DB tests, run in CI |
+| Customer order-detail scope guard | `routes::admin::tests::test_scoped_admin_forbidden_on_customer_order_detail_route` — DB test, runs in CI |
