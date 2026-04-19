@@ -270,7 +270,7 @@ pub async fn create_user_notification_with_ref(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Weekday};
+    use chrono::{Timelike, Weekday};
 
     fn prefs_with(
         dnd_enabled: bool,
