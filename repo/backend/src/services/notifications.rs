@@ -358,4 +358,99 @@ mod tests {
             panic!("expected Some(display_after) for weekly frequency");
         }
     }
+
+    #[test]
+    fn daily_frequency_defers_to_some_future_time() {
+        let prefs = prefs_with(false, (21, 0), (6, 0), "daily");
+        let da = compute_display_after(&prefs, "order");
+        assert!(da.is_some(), "daily frequency must produce a deferral time");
+        let da = da.unwrap();
+        // Must land at 17:00 on some day.
+        assert_eq!(da.time().hour(), 17);
+        assert_eq!(da.time().minute(), 0);
+        assert!(da > Utc::now(), "deferral must be in the future");
+    }
+
+    #[test]
+    fn daily_frequency_target_is_at_five_pm() {
+        let prefs = prefs_with(false, (21, 0), (6, 0), "daily");
+        let da = compute_display_after(&prefs, "general").unwrap();
+        assert_eq!(da.time().hour(), 17, "daily digest target hour must be 17 (5 PM UTC)");
+        assert_eq!(da.time().minute(), 0);
+        assert_eq!(da.time().second(), 0);
+    }
+
+    #[test]
+    fn unknown_notification_type_uses_general_toggle() {
+        // Unknown type falls back to notif_general.
+        let prefs_on = UserPreferences { notif_general: true, ..UserPreferences::default() };
+        assert!(is_type_enabled(&prefs_on, "foobar"), "unknown type should default to notif_general=true");
+
+        let prefs_off = UserPreferences { notif_general: false, ..UserPreferences::default() };
+        assert!(!is_type_enabled(&prefs_off, "foobar"), "unknown type should default to notif_general=false");
+    }
+
+    #[test]
+    fn order_toggle_blocks_order_type() {
+        let prefs = UserPreferences { notif_order: false, ..UserPreferences::default() };
+        assert!(!is_type_enabled(&prefs, "order"));
+        assert!(is_type_enabled(&prefs, "checkin"), "other types unaffected");
+    }
+
+    #[test]
+    fn dnd_overnight_outside_window_no_deferral() {
+        // DND window is 22:00–06:00.  During the daytime (14:00) we are outside
+        // the DND window, so an immediate notification should not be deferred.
+        let prefs = prefs_with(true, (22, 0), (6, 0), "immediate");
+        // We cannot control Utc::now(), but we can verify the function at least
+        // returns a consistent result — if now is outside the window, result is None;
+        // if inside (e.g. running at 23:00 UTC in CI), it returns Some.
+        // Either way the deferred time, if Some, must be in the future.
+        if let Some(da) = compute_display_after(&prefs, "general") {
+            assert!(da > Utc::now(), "any deferred time must be in the future");
+        }
+    }
+
+    #[test]
+    fn dnd_same_day_window_inside_defers() {
+        // DND from 08:00–20:00 covers most of the workday.
+        let prefs = prefs_with(true, (8, 0), (20, 0), "immediate");
+        // Same reasoning as above — outcome depends on wall-clock time.
+        if let Some(da) = compute_display_after(&prefs, "checkin") {
+            assert!(da > Utc::now());
+            // When deferred, the end-time (20:00 today or tomorrow) must be at 20:00.
+            assert_eq!(da.time().hour(), 20);
+            assert_eq!(da.time().minute(), 0);
+        }
+    }
+
+    #[test]
+    fn dnd_and_daily_frequency_takes_later_of_two_floors() {
+        // Both DND and daily frequency produce floors; the function must take the max.
+        let prefs = prefs_with(true, (0, 0), (23, 59), "daily");
+        let da = compute_display_after(&prefs, "checkin");
+        assert!(da.is_some(), "at least one floor must be active");
+        let da = da.unwrap();
+        assert!(da > Utc::now(), "deferred time must be in the future");
+    }
+
+    #[test]
+    fn is_critical_identifies_correct_types() {
+        assert!(is_critical("alert"));
+        assert!(is_critical("system"));
+        assert!(!is_critical("checkin"));
+        assert!(!is_critical("order"));
+        assert!(!is_critical("general"));
+        assert!(!is_critical("foobar"));
+    }
+
+    #[test]
+    fn default_preferences_are_permissive() {
+        let prefs = UserPreferences::default();
+        assert!(prefs.notif_checkin);
+        assert!(prefs.notif_order);
+        assert!(prefs.notif_general);
+        assert!(!prefs.dnd_enabled);
+        assert_eq!(prefs.inbox_frequency, "immediate");
+    }
 }

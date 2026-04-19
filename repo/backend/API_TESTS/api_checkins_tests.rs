@@ -448,6 +448,57 @@ async fn test_list_window_homerooms_requires_auth() {
     assert!(body["error"].is_string(), "401 must include an error field");
 }
 
+/// GET /api/v1/check-ins/windows/{window_id}/homerooms with a real window that has
+/// a class returns 200 and an array of homeroom objects with id and name fields.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_list_window_homerooms_returns_array_with_fields() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let school_id = seed_school(&pool, suffix).await;
+    let admin_name = format!("hr_admin_{}", suffix);
+    let admin_id = seed_super_admin(&pool, &admin_name).await;
+
+    // Seed a class (homeroom) in this school.
+    let class_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO classes (id, school_id, teacher_id, name, academic_year, active, created_at)
+         VALUES ($1, $2, $3, $4, '2026', TRUE, NOW())",
+    )
+    .bind(class_id)
+    .bind(school_id)
+    .bind(admin_id)
+    .bind(format!("Homeroom 4-A {}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed class failed");
+
+    let window_id = seed_open_window(&pool, school_id, admin_id, suffix).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let token = login_token(&app, &admin_name).await;
+
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/check-ins/windows/{}/homerooms", window_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "homerooms list must return 200");
+    let body: Value = read_body_json(resp).await;
+    let items = body.as_array().expect("homerooms response must be a JSON array");
+    assert!(!items.is_empty(), "homerooms list must be non-empty after seeding a class");
+    for item in items {
+        assert!(item["id"].is_string(), "homeroom.id must be a string");
+        assert!(item["name"].is_string(), "homeroom.name must be a string");
+    }
+}
+
 /// POST /api/v1/check-ins/windows/{wid}/submissions/{sid}/decide without auth → 401.
 #[actix_web::test]
 #[ignore = "requires TEST_DATABASE_URL"]

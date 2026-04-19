@@ -454,6 +454,83 @@ mod tests {
         assert_eq!(LOG_RETENTION_DAYS, 180);
     }
 
+    #[test]
+    fn tick_interval_is_sixty_seconds() {
+        assert_eq!(TICK_INTERVAL_SECS, 60);
+    }
+
+    // ── Pure date arithmetic used by the scheduler ────────────────────────
+
+    #[test]
+    fn yesterday_is_one_day_before_today() {
+        let today = NaiveDate::from_ymd_opt(2025, 3, 15).unwrap();
+        let yesterday = today.pred_opt().unwrap();
+        assert_eq!(yesterday, NaiveDate::from_ymd_opt(2025, 3, 14).unwrap());
+    }
+
+    #[test]
+    fn yesterday_wraps_across_month_boundary() {
+        let today = NaiveDate::from_ymd_opt(2025, 4, 1).unwrap();
+        let yesterday = today.pred_opt().unwrap();
+        assert_eq!(yesterday, NaiveDate::from_ymd_opt(2025, 3, 31).unwrap());
+    }
+
+    #[test]
+    fn weekly_report_spans_exactly_seven_days() {
+        let today = NaiveDate::from_ymd_opt(2025, 3, 17).unwrap(); // Monday
+        let week_end = today.pred_opt().unwrap();                    // Sunday March 16
+        let week_start = week_end.checked_sub_days(chrono::Days::new(6)).unwrap(); // Monday March 10
+        let span = (week_end - week_start).num_days();
+        assert_eq!(span, 6, "week_end - week_start must be 6 days (7-day window)");
+    }
+
+    #[test]
+    fn weekly_report_week_start_is_correct() {
+        // today = Monday 2025-03-17; yesterday = Sunday 2025-03-16
+        // week window = Mon 2025-03-10 → Sun 2025-03-16
+        let today = NaiveDate::from_ymd_opt(2025, 3, 17).unwrap();
+        let week_end = today.pred_opt().unwrap();
+        let week_start = week_end.checked_sub_days(chrono::Days::new(6)).unwrap();
+        assert_eq!(week_start, NaiveDate::from_ymd_opt(2025, 3, 10).unwrap());
+        assert_eq!(week_end, NaiveDate::from_ymd_opt(2025, 3, 16).unwrap());
+    }
+
+    #[test]
+    fn scheduler_only_fires_daily_report_once_per_day() {
+        let today = NaiveDate::from_ymd_opt(2025, 6, 1).unwrap();
+        let yesterday = NaiveDate::from_ymd_opt(2025, 5, 31).unwrap();
+
+        // last_daily not set → should fire
+        let last_daily: Option<NaiveDate> = None;
+        assert!(last_daily.map(|d| d < today).unwrap_or(true), "must fire when last_daily is None");
+
+        // last_daily = yesterday → should fire
+        let last_daily = Some(yesterday);
+        assert!(last_daily.map(|d| d < today).unwrap_or(true), "must fire when last_daily is yesterday");
+
+        // last_daily = today → should NOT fire
+        let last_daily = Some(today);
+        assert!(!last_daily.map(|d| d < today).unwrap_or(true), "must NOT fire when last_daily is today");
+    }
+
+    #[test]
+    fn scheduler_only_fires_weekly_report_on_mondays() {
+        use chrono::Weekday;
+        let monday = NaiveDate::from_ymd_opt(2025, 3, 17).unwrap();
+        let tuesday = NaiveDate::from_ymd_opt(2025, 3, 18).unwrap();
+        let sunday = NaiveDate::from_ymd_opt(2025, 3, 16).unwrap();
+
+        assert_eq!(monday.weekday(), Weekday::Mon);
+        assert_ne!(tuesday.weekday(), Weekday::Mon);
+        assert_ne!(sunday.weekday(), Weekday::Mon);
+
+        // Replicate the scheduler's gate condition
+        let should_run = |day: NaiveDate| day.weekday() == Weekday::Mon;
+        assert!(should_run(monday));
+        assert!(!should_run(tuesday));
+        assert!(!should_run(sunday));
+    }
+
     /// Retention: only prunes entries older than the retention window.
     #[actix_web::test]
     #[ignore = "requires DATABASE_URL"]

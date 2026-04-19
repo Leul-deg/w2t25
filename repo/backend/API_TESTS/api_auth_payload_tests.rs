@@ -459,3 +459,123 @@ async fn test_verify_password_wrong_returns_401() {
     let body: Value = read_body_json(verify_resp).await;
     assert!(body["error"].is_string(), "wrong verify must return error field");
 }
+
+// ---------------------------------------------------------------------------
+// POST /auth/request-deletion
+// ---------------------------------------------------------------------------
+
+/// POST /api/v1/auth/request-deletion without auth must return 401.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_auth_request_deletion_requires_auth() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/request-deletion")
+        .set_json(serde_json::json!({ "reason": "no longer needed" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 401, "/auth/request-deletion must require auth");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "401 must include an error field");
+}
+
+/// POST /api/v1/auth/request-deletion with a valid auth token submits the deletion
+/// request and returns a 201 with a message field.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_auth_request_deletion_happy_path() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let username = format!("auth_del_req_{}", suffix);
+    seed_user(&pool, &username, "Student").await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &username, "password": "TestPass2024!!" }))
+        .to_request();
+    let login_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = login_body["token"].as_str().expect("token missing").to_string();
+
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/request-deletion")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "reason": "I no longer need this account" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "/auth/request-deletion must return 201 on success");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["message"].is_string(), "201 response must include a message field");
+
+    // Verify the deletion request was persisted.
+    let uid: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE username = $1")
+        .bind(&username)
+        .fetch_one(&pool)
+        .await
+        .expect("user must exist");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM account_deletion_requests WHERE user_id = $1 AND status = 'pending'",
+    )
+    .bind(uid)
+    .fetch_one(&pool)
+    .await
+    .expect("query failed");
+    assert_eq!(count, 1, "one pending deletion request must exist in the DB");
+}
+
+/// POST /api/v1/auth/request-deletion a second time returns 409 (duplicate).
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_auth_request_deletion_duplicate_returns_409() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let username = format!("auth_del_dup_{}", suffix);
+    seed_user(&pool, &username, "Student").await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let login_req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({ "username": &username, "password": "TestPass2024!!" }))
+        .to_request();
+    let login_body: Value = read_body_json(call_service(&app, login_req).await).await;
+    let token = login_body["token"].as_str().expect("token missing").to_string();
+
+    // First request must succeed.
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/request-deletion")
+        .insert_header(("Authorization", format!("Bearer {}", token.clone())))
+        .set_json(serde_json::json!({ "reason": "leaving" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 201, "first deletion request must return 201");
+
+    // Second request must be rejected.
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/request-deletion")
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .set_json(serde_json::json!({ "reason": "again" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 409, "duplicate deletion request must return 409");
+    let body: Value = read_body_json(resp).await;
+    assert!(body["error"].is_string(), "409 must include an error field");
+}

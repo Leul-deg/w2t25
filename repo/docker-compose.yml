@@ -7,6 +7,8 @@ services:
       POSTGRES_PASSWORD: meridian
       POSTGRES_DB: meridian
     ports:
+      # Exposed on 55432 so host-side test runners can reach the database
+      # without colliding with a locally installed PostgreSQL on 5432.
       - "55432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -16,5 +18,46 @@ services:
       timeout: 5s
       retries: 10
 
+  backend:
+    build:
+      # Build context is the repo root so the Dockerfile can access both
+      # backend/ and migrations/ (needed by sqlx::migrate! at compile time).
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://meridian:meridian@postgres:5432/meridian
+      HOST: 0.0.0.0
+      PORT: "8080"
+      # Change this to a strong random value before any non-local deployment.
+      # Generate one with: openssl rand -hex 64
+      SESSION_SECRET: "local-dev-session-secret-change-this-before-any-real-deployment-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      SESSION_MAX_AGE_SECONDS: "3600"
+      LOG_LEVEL: info
+      # Leave empty to disable the backup API; set to a strong passphrase to enable it.
+      BACKUP_ENCRYPTION_KEY: ""
+      EXPORTS_DIR: /app/exports
+      BACKUPS_DIR: /app/backups
+    volumes:
+      - exports:/app/exports
+      - backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  exports:
+  backups:

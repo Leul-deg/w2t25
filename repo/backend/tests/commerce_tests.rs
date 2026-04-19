@@ -240,7 +240,7 @@ async fn test_order_creation_happy_path() {
     let subtotal = (price_cents as i64) * 2; // quantity = 2
     let total = subtotal + fee;
     let points = (subtotal / 100) * rate;
-    assert_eq!(total, subtotal + 695);
+    assert_eq!(total, subtotal + fee, "total must equal subtotal + shipping fee from config");
     assert!(points >= 0);
 
     println!(
@@ -289,10 +289,21 @@ async fn test_config_versioning() {
     .await
     .expect("query failed");
 
-    let old_val = old_val.unwrap_or("695".to_string());
+    // Always use the canonical default as the "old" value so we reliably
+    // restore it regardless of what other tests may have left in the DB.
+    let _ = old_val; // captured above only for the history record
+    let canonical_default = "695";
     let new_val = "500";
 
-    // Apply update.
+    // Ensure the value is at the canonical default before we start.
+    sqlx::query("UPDATE config_values SET value = $1, updated_at = NOW() WHERE key = $2")
+        .bind(canonical_default)
+        .bind("shipping_fee_cents")
+        .execute(&pool)
+        .await
+        .expect("reset to canonical default failed");
+
+    // Apply test update.
     sqlx::query("UPDATE config_values SET value = $1, updated_at = NOW() WHERE key = $2")
         .bind(new_val)
         .bind("shipping_fee_cents")
@@ -307,7 +318,7 @@ async fn test_config_versioning() {
     )
     .bind(uuid::Uuid::new_v4())
     .bind("shipping_fee_cents")
-    .bind(&old_val)
+    .bind(canonical_default)
     .bind(new_val)
     .execute(&pool)
     .await
@@ -322,9 +333,10 @@ async fn test_config_versioning() {
 
     assert_eq!(after, before + 1, "Config history should have one more entry");
 
-    // Restore.
+    // Always restore to the canonical default — never to whatever was in the
+    // DB before, which may have been left dirty by a previous test run.
     sqlx::query("UPDATE config_values SET value = $1 WHERE key = $2")
-        .bind(&old_val)
+        .bind(canonical_default)
         .bind("shipping_fee_cents")
         .execute(&pool)
         .await

@@ -464,6 +464,153 @@ async fn test_order_placement_and_fulfillment_chain() {
 }
 
 // ---------------------------------------------------------------------------
+// E2E: config value update is reflected in audit history
+// ---------------------------------------------------------------------------
+
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_config_value_update_appears_in_audit_log() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let admin_name = format!("e2e_cfg_admin_{}", suffix);
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .app_data(web::Data::new(test_config()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let admin_token = login_token(&app, &admin_name).await;
+
+    // Read the current config to find an existing key.
+    let req = TestRequest::get()
+        .uri("/api/v1/admin/config")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin config list must return 200");
+
+    // Update the `log_retention_days` config value.
+    let req = TestRequest::patch()
+        .uri("/api/v1/admin/config/values/log_retention_days")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "value": "200" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "config value update must return 200");
+
+    // Read config history — the update should appear there.
+    let req = TestRequest::get()
+        .uri("/api/v1/admin/config/history")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "config history must return 200");
+    let body: serde_json::Value = read_body_json(resp).await;
+    let history = body.as_array().expect("history must be an array");
+    assert!(
+        history.iter().any(|row| row["key"].as_str() == Some("log_retention_days")),
+        "config history must include the recently updated key"
+    );
+
+    // Verify the audit log also captured the change.
+    let req = TestRequest::get()
+        .uri("/api/v1/logs/audit")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "audit log endpoint must return 200");
+    let body: serde_json::Value = read_body_json(resp).await;
+    let logs = body.as_array().expect("audit logs must be array");
+    assert!(
+        logs.iter().any(|entry| entry["action"].as_str() == Some("update_config")),
+        "audit log must contain an update_config entry after config change"
+    );
+
+    // Restore the original value so other tests are not affected.
+    let req = TestRequest::patch()
+        .uri("/api/v1/admin/config/values/log_retention_days")
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "value": "180" }))
+        .to_request();
+    let _ = call_service(&app, req).await;
+}
+
+// ---------------------------------------------------------------------------
+// E2E: admin changes user state from blocked to active; login behaviour follows
+// ---------------------------------------------------------------------------
+
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_admin_user_state_management_affects_login() {
+    let pool = test_pool().await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+
+    let student_name = format!("e2e_state_student_{}", suffix);
+    let admin_name = format!("e2e_state_admin_{}", suffix);
+
+    let student_id = seed_user(&pool, &student_name, "Student").await;
+    let admin_id = seed_user(&pool, &admin_name, "Administrator").await;
+    make_super_admin(&pool, admin_id).await;
+
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+
+    let admin_token = login_token(&app, &admin_name).await;
+
+    // Step 1: Admin suspends the student account.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/users/{}/set-state", student_id))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "state": "suspended" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "admin set-state must return 200");
+
+    // Step 2: Suspended student cannot log in.
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({
+            "username": student_name,
+            "password": "TestPass2024!!"
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 403, "suspended account must get 403 on login");
+
+    // Step 3: Admin re-activates the student account.
+    let req = TestRequest::post()
+        .uri(&format!("/api/v1/admin/users/{}/set-state", student_id))
+        .insert_header(("Authorization", format!("Bearer {}", admin_token)))
+        .set_json(serde_json::json!({ "state": "active" }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "re-activating account must return 200");
+
+    // Step 4: Student can log in again.
+    let req = TestRequest::post()
+        .uri("/api/v1/auth/login")
+        .set_json(serde_json::json!({
+            "username": student_name,
+            "password": "TestPass2024!!"
+        }))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "re-activated account must be able to log in");
+    let body: serde_json::Value = read_body_json(resp).await;
+    assert!(body["token"].as_str().is_some(), "login after re-activation must return a token");
+}
+
+// ---------------------------------------------------------------------------
 // E2E: campaign toggle affects order shipping fee
 // ---------------------------------------------------------------------------
 

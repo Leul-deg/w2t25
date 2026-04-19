@@ -2,9 +2,12 @@
 ///
 /// Tests pure-Rust formatting and arithmetic methods on Product, OrderSummary,
 /// OrderItem, CartItem, and KpiData — no browser or WASM runtime required.
+/// Also covers PatchPreferences serialization and Notification field contracts.
 ///
 /// Run with:
 ///   cd frontend && cargo test --test store_display_tests
+use meridian_frontend::api::preferences::{PatchPreferences, Preferences};
+use meridian_frontend::api::notifications::Notification;
 use meridian_frontend::api::store::{CartItem, KpiData, OrderItem, OrderSummary, Product};
 use uuid::Uuid;
 
@@ -257,4 +260,149 @@ fn kpi_repeat_rate_display_rounds_to_one_decimal() {
 #[test]
 fn kpi_daily_sales_display_zero() {
     assert_eq!(make_kpi(0, 0, 0.0).daily_sales_display(), "$0.00");
+}
+
+// ---------------------------------------------------------------------------
+// PatchPreferences — partial-update serialisation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn patch_preferences_default_serializes_to_empty_object() {
+    let patch = PatchPreferences::default();
+    let json = serde_json::to_string(&patch).expect("serialise");
+    let val: serde_json::Value = serde_json::from_str(&json).expect("parse");
+    assert_eq!(val, serde_json::json!({}), "all-None patch must serialise to {{}}");
+}
+
+#[test]
+fn patch_preferences_only_set_fields_are_serialized() {
+    let patch = PatchPreferences {
+        inbox_frequency: Some("daily".into()),
+        dnd_enabled: Some(true),
+        ..PatchPreferences::default()
+    };
+    let val: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+    assert_eq!(val["inbox_frequency"], "daily");
+    assert_eq!(val["dnd_enabled"], true);
+    // Fields not set must be absent from the JSON.
+    assert!(val.get("notif_checkin").is_none(), "unset fields must be omitted");
+    assert!(val.get("dnd_start").is_none());
+}
+
+#[test]
+fn patch_preferences_all_fields_set_serializes_all() {
+    let patch = PatchPreferences {
+        notif_checkin: Some(false),
+        notif_order: Some(true),
+        notif_general: Some(false),
+        dnd_enabled: Some(true),
+        dnd_start: Some("22:00".into()),
+        dnd_end: Some("07:00".into()),
+        inbox_frequency: Some("weekly".into()),
+    };
+    let val: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+    assert_eq!(val["notif_checkin"], false);
+    assert_eq!(val["notif_order"], true);
+    assert_eq!(val["notif_general"], false);
+    assert_eq!(val["dnd_enabled"], true);
+    assert_eq!(val["dnd_start"], "22:00");
+    assert_eq!(val["dnd_end"], "07:00");
+    assert_eq!(val["inbox_frequency"], "weekly");
+}
+
+#[test]
+fn patch_preferences_false_bool_is_not_skipped() {
+    // None is skipped; Some(false) must NOT be skipped.
+    let patch = PatchPreferences {
+        notif_checkin: Some(false),
+        ..PatchPreferences::default()
+    };
+    let val: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(&patch).unwrap()).unwrap();
+    assert_eq!(val["notif_checkin"], false, "Some(false) must appear in JSON");
+}
+
+// ---------------------------------------------------------------------------
+// Preferences — field types and round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn preferences_deserializes_from_server_json() {
+    let raw = r#"{
+        "notif_checkin": true,
+        "notif_order": false,
+        "notif_general": true,
+        "dnd_enabled": false,
+        "dnd_start": "21:00",
+        "dnd_end": "06:00",
+        "inbox_frequency": "immediate"
+    }"#;
+    let prefs: Preferences = serde_json::from_str(raw).expect("deserialise");
+    assert!(prefs.notif_checkin);
+    assert!(!prefs.notif_order);
+    assert_eq!(prefs.dnd_start, "21:00");
+    assert_eq!(prefs.dnd_end, "06:00");
+    assert_eq!(prefs.inbox_frequency, "immediate");
+}
+
+// ---------------------------------------------------------------------------
+// Notification — field contracts
+// ---------------------------------------------------------------------------
+
+fn make_notification(notification_type: &str, read_at: Option<&str>) -> Notification {
+    Notification {
+        id: "00000000-0000-0000-0000-000000000001".into(),
+        subject: "Test Notification".into(),
+        body: "This is a test.".into(),
+        notification_type: notification_type.into(),
+        read_at: read_at.map(String::from),
+        created_at: "2025-01-01T10:00:00Z".into(),
+        sender_username: None,
+    }
+}
+
+#[test]
+fn notification_is_read_when_read_at_is_some() {
+    let n = make_notification("general", Some("2025-01-01T11:00:00Z"));
+    assert!(n.read_at.is_some(), "notification with read_at must be read");
+}
+
+#[test]
+fn notification_is_unread_when_read_at_is_none() {
+    let n = make_notification("order", None);
+    assert!(n.read_at.is_none(), "notification without read_at must be unread");
+}
+
+#[test]
+fn notification_type_field_matches_what_was_set() {
+    assert_eq!(make_notification("checkin", None).notification_type, "checkin");
+    assert_eq!(make_notification("alert", None).notification_type, "alert");
+    assert_eq!(make_notification("system", None).notification_type, "system");
+}
+
+#[test]
+fn notification_sender_username_is_optional() {
+    let mut n = make_notification("general", None);
+    assert!(n.sender_username.is_none());
+    n.sender_username = Some("admin_user".into());
+    assert_eq!(n.sender_username.as_deref(), Some("admin_user"));
+}
+
+#[test]
+fn notification_deserializes_from_server_json() {
+    let raw = r#"{
+        "id": "aaaaaaaa-0000-0000-0000-000000000001",
+        "subject": "Your check-in was approved",
+        "body": "Check-in for Window 1 has been approved.",
+        "notification_type": "checkin",
+        "read_at": null,
+        "created_at": "2025-06-01T09:00:00Z",
+        "sender_username": "teacher_jane"
+    }"#;
+    let n: Notification = serde_json::from_str(raw).expect("deserialise");
+    assert_eq!(n.notification_type, "checkin");
+    assert!(n.read_at.is_none());
+    assert_eq!(n.sender_username.as_deref(), Some("teacher_jane"));
 }

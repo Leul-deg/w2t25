@@ -209,6 +209,62 @@ async fn test_get_nonexistent_product_returns_404_with_error() {
     );
 }
 
+/// GET /api/v1/products/{id} for an existing active product returns 200 with
+/// the required shape: id, name, price_cents, active, quantity, low_stock_threshold.
+#[actix_web::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn test_get_product_by_id_returns_correct_shape() {
+    let pool = test_pool().await;
+    let app = init_service(
+        App::new()
+            .app_data(web::Data::new(pool.clone()))
+            .configure(configure_routes),
+    )
+    .await;
+    let suffix = &Uuid::new_v4().to_string()[..8];
+    let token =
+        seed_user_and_login(&app, &pool, &format!("prod_byid_{}", suffix), "Student").await;
+
+    // Seed a product so we have a known ID to fetch.
+    let product_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO products (id, name, price_cents, sku, active, created_at, updated_at)
+         VALUES ($1, $2, 1500, $3, TRUE, NOW(), NOW())",
+    )
+    .bind(product_id)
+    .bind(format!("Test Product {}", suffix))
+    .bind(format!("SKU-BYID-{}", suffix))
+    .execute(&pool)
+    .await
+    .expect("seed product failed");
+    sqlx::query(
+        "INSERT INTO inventory (product_id, quantity, low_stock_threshold, last_updated_at)
+         VALUES ($1, 25, 5, NOW())
+         ON CONFLICT (product_id) DO UPDATE SET quantity = 25",
+    )
+    .bind(product_id)
+    .execute(&pool)
+    .await
+    .expect("seed inventory failed");
+
+    let req = TestRequest::get()
+        .uri(&format!("/api/v1/products/{}", product_id))
+        .insert_header(("Authorization", format!("Bearer {}", token)))
+        .to_request();
+    let resp = call_service(&app, req).await;
+    assert_eq!(resp.status(), 200, "GET /products/{{id}} must return 200 for an existing product");
+    let body: Value = read_body_json(resp).await;
+
+    assert_eq!(
+        body["id"].as_str().unwrap(),
+        product_id.to_string(),
+        "product.id must match the requested id"
+    );
+    assert!(body["name"].is_string(), "product.name must be a string");
+    assert!(body["price_cents"].is_number(), "product.price_cents must be a number");
+    assert_eq!(body["active"], true, "fetched product must be active");
+}
+
 /// Admin GET /api/v1/admin/products must return an array where each item
 /// includes inventory fields (quantity, low_stock_threshold).
 #[actix_web::test]

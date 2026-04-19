@@ -14,29 +14,37 @@ pub struct LoginResponse {
     pub user: UserPublic,
 }
 
+/// Map an HTTP status code and server message to the appropriate `LoginError`
+/// variant.  Extracted as a pure function so it can be unit-tested without
+/// needing an HTTP runtime.
+pub fn map_http_login_error(status: u16, server_msg: String) -> LoginError {
+    match status {
+        401 => LoginError::InvalidCredentials,
+        429 => LoginError::TooManyAttempts(server_msg),
+        403 => LoginError::AccountBlocked(server_msg),
+        422 => LoginError::ValidationError(server_msg),
+        _ => LoginError::NetworkError(format!("HTTP {}: {}", status, server_msg)),
+    }
+}
+
 pub async fn login(username: String, password: String) -> Result<LoginResponse, LoginError> {
     let body = LoginRequest { username, password };
     match post::<LoginRequest, LoginResponse>("/auth/login", &body, None).await {
         Ok(resp) => Ok(resp),
         Err(ApiError::Http { status, message }) => {
-            // Parse the server's JSON error body to extract the "error" field
+            // Parse the server's JSON error body to extract the "error" field.
             let server_msg = serde_json::from_str::<serde_json::Value>(&message)
                 .ok()
                 .and_then(|v| v["error"].as_str().map(|s| s.to_string()))
                 .unwrap_or_else(|| message.clone());
 
-            match status {
-                401 => Err(LoginError::InvalidCredentials),
-                429 => Err(LoginError::TooManyAttempts(server_msg)),
-                403 => Err(LoginError::AccountBlocked(server_msg)),
-                422 => Err(LoginError::ValidationError(server_msg)),
-                _ => Err(LoginError::NetworkError(format!("HTTP {}: {}", status, server_msg))),
-            }
+            Err(map_http_login_error(status, server_msg))
         }
         Err(ApiError::Network(e)) => Err(LoginError::NetworkError(e)),
         Err(ApiError::Deserialize(e)) => Err(LoginError::NetworkError(e)),
     }
 }
+
 
 pub async fn me(token: &str) -> Result<UserPublic, ApiError> {
     get::<UserPublic>("/auth/me", Some(token)).await

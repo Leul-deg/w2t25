@@ -98,26 +98,63 @@ meridian/
 
 ## Prerequisites
 
+### Docker setup (recommended)
+
+- [Docker](https://docs.docker.com/get-docker/) with the Compose plugin (included in Docker Desktop)
+
+That is the only requirement. Everything else — Rust toolchain, PostgreSQL, trunk, wasm32 target — runs inside the containers.
+
+### Local setup (alternative — requires host tooling)
+
+Only needed if you want to run the services directly on your host machine:
+
 - Rust stable (≥ 1.75) — [rustup.rs](https://rustup.rs)
 - `cargo` (comes with Rust)
-- `trunk` — Yew build tool: `cargo install trunk`
-- `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
-- PostgreSQL 14+ running locally (no Docker required)
-- `psql` CLI available
-- `pg_dump` CLI available (same version as your PostgreSQL server; needed for backups)
+- `trunk` — Yew build tool (`cargo install trunk`)
+- `wasm32-unknown-unknown` target (`rustup target add wasm32-unknown-unknown`)
+- PostgreSQL 14+ running locally
+- `psql` CLI
+- `pg_dump` CLI (same major version as your PostgreSQL server; needed for backups)
 
 ---
 
-## Expected startup order
+## Quick start — Docker (recommended)
 
-1. PostgreSQL must be running and the database/user must exist.
-2. Start the backend (`cargo run`). It runs all 15 migrations automatically on boot.
-3. Run the seed binary once: `cargo run --bin seed`.
-4. Start the frontend (`trunk serve`).
+From the `repo/` directory:
+
+```bash
+docker compose up --build
+```
+
+This single command:
+
+1. Pulls and starts a PostgreSQL 16 container and waits until it is healthy.
+2. Builds the Rust backend binary (multi-stage Docker build) and the seed binary.
+3. Runs the seed binary, which applies all 15 migrations and upserts the reference data.
+4. Starts the backend API server on **http://localhost:8080**.
+5. Builds the Yew/WASM frontend with trunk (multi-stage Docker build).
+6. Serves the frontend via nginx on **http://localhost:8081**.
+
+Open **http://localhost:8081** in your browser once all three services show healthy.
+
+> **First build:** The Rust compilation steps inside Docker take several minutes. Subsequent builds are faster because Docker caches the dependency layer.
+
+### Optional: enable the backup API
+
+The backup API is disabled by default (requires a passphrase). To enable it, set
+`BACKUP_ENCRYPTION_KEY` in `docker-compose.yml` under the `backend` service
+environment before starting:
+
+```yaml
+BACKUP_ENCRYPTION_KEY: "your-strong-passphrase-here"
+```
 
 ---
 
-## Local setup (no Docker)
+## Alternative: local setup (no Docker)
+
+Use this path only if you prefer running the services directly with a local Rust
+toolchain and PostgreSQL installation.
 
 ### 1 — Create the PostgreSQL database
 
@@ -141,11 +178,6 @@ Edit `backend/.env` if your PostgreSQL credentials differ. To enable backups, se
 
 ```
 BACKUP_ENCRYPTION_KEY=your_strong_passphrase_here
-```
-
-Generate a strong value with:
-```bash
-openssl rand -hex 32
 ```
 
 ### 3 — Create export/backup directories
@@ -265,16 +297,29 @@ cargo check --target wasm32-unknown-unknown
 ### Verified test run results
 
 All ignored DB tests can be verified by running `repo/run_tests.sh` with a live
-PostgreSQL instance (or via the bundled Docker Compose database). The checked-in
-test suites that are executed are:
+PostgreSQL instance (or via the bundled Docker Compose database). The full set of
+test suites and what they cover:
 
-| Suite | Notes |
-|---|---|
-| `schema_integrity_tests` | Migration clean-state + lockout semantics; `--test-threads=1` required |
-| `hardening_tests` | Reporting, PII masking, backup encryption, retention |
-| `commerce_tests` | Order creation, shipping fee, points, config versioning; `--test-threads=1` required |
-| `admin_scope_tests` | Super-admin flag, scoped-by-default, campus isolation |
-| binary (`meridian-backend`) | Auth, check-in, admin HTTP scope, preferences, notifications |
+| Suite | Location | Covers |
+|---|---|---|
+| `schema_integrity_tests` | `tests/` | Migration clean-state, lockout semantics, check-in report SQL; `--test-threads=1` required |
+| `hardening_tests` | `tests/` | Reporting, PII masking, backup encryption, retention |
+| `commerce_tests` | `tests/` | Order creation, shipping fee, points, config versioning; `--test-threads=1` required |
+| `admin_scope_tests` | `tests/` | Super-admin flag, scoped-by-default, campus isolation |
+| binary (`meridian-backend`) | in-source | Auth, check-in, admin HTTP scope, preferences, notifications |
+| `api_authorization_tests` | `API_TESTS/` | Auth/admin 401/403 enforcement across shared surfaces |
+| `api_auth_payload_tests` | `API_TESTS/` | Login, me, logout, verify, auth/request-deletion payload shapes |
+| `api_products_tests` | `API_TESTS/` | Public list, public detail, admin CRUD shapes |
+| `api_orders_tests` | `API_TESTS/` | Create, list, detail, admin management, KPI |
+| `api_checkins_tests` | `API_TESTS/` | Windows, submit, decide, homerooms, my-checkins |
+| `api_backups_reports_tests` | `API_TESTS/` | Report create/list/get/download, backup list/get/restore |
+| `api_users_tests` | `API_TESTS/` | GET /users/me, linked-students, deletion requests |
+| `api_notifications_payload_tests` | `API_TESTS/` | Inbox list, unread count, mark-read, reminders |
+| `api_admin_users_payload_tests` | `API_TESTS/` | User state changes, deletion request approval/rejection |
+| `api_config_tests` | `API_TESTS/` | Config list/update, history, campaigns, public commerce summary |
+| `api_logs_tests` | `API_TESTS/` | Audit, access, error log endpoints |
+| `api_preferences_tests` | `API_TESTS/` | GET defaults, PATCH persistence, PATCH validation |
+| `e2e_workflow_tests` | `e2e_tests/` | Multi-step API workflows: deletion roundtrip, check-in cycle, campaign-price interaction |
 
 Note: `commerce_tests` requires `--test-threads=1` because `test_config_versioning`
 mutates `shipping_fee_cents` and restores it; concurrent execution races with
@@ -283,11 +328,12 @@ that flag enabled.
 
 ### Checked-in runner
 
-The checked-in smoke runner is:
+The checked-in smoke runner is `repo/run_tests.sh`. Run it from inside the `repo/`
+directory:
 
 ```bash
-cd ..
-repo/run_tests.sh
+cd repo
+./run_tests.sh
 ```
 
 It runs:

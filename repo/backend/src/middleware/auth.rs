@@ -307,6 +307,124 @@ pub async fn require_order_in_admin_scope(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Unit tests (no DB required — only pure role-check logic)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_auth(roles: &[&str]) -> AuthContext {
+        AuthContext(AuthenticatedUser {
+            user_id: Uuid::new_v4(),
+            username: "test_user".into(),
+            roles: roles.iter().map(|s| s.to_string()).collect(),
+            account_state: "active".into(),
+        })
+    }
+
+    // ── require_role ──────────────────────────────────────────────────────
+
+    #[test]
+    fn require_role_passes_when_role_present() {
+        let auth = make_auth(&["Teacher"]);
+        assert!(auth.require_role("Teacher").is_ok());
+    }
+
+    #[test]
+    fn require_role_fails_when_role_absent() {
+        let auth = make_auth(&["Student"]);
+        let err = auth.require_role("Administrator").unwrap_err();
+        match err {
+            AppError::Forbidden(msg) => assert!(msg.contains("Administrator")),
+            other => panic!("expected Forbidden, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn require_role_passes_with_multiple_roles() {
+        let auth = make_auth(&["Teacher", "Administrator"]);
+        assert!(auth.require_role("Administrator").is_ok());
+        assert!(auth.require_role("Teacher").is_ok());
+    }
+
+    #[test]
+    fn require_role_fails_with_empty_role_list() {
+        let auth = make_auth(&[]);
+        assert!(auth.require_role("Student").is_err());
+    }
+
+    // ── require_any_role ──────────────────────────────────────────────────
+
+    #[test]
+    fn require_any_role_passes_with_one_matching_role() {
+        let auth = make_auth(&["AcademicStaff"]);
+        assert!(auth.require_any_role(&["Teacher", "AcademicStaff"]).is_ok());
+    }
+
+    #[test]
+    fn require_any_role_fails_when_none_match() {
+        let auth = make_auth(&["Student"]);
+        assert!(auth.require_any_role(&["Teacher", "Administrator"]).is_err());
+    }
+
+    #[test]
+    fn require_any_role_fails_with_empty_allowed_list() {
+        let auth = make_auth(&["Administrator"]);
+        assert!(auth.require_any_role(&[]).is_err());
+    }
+
+    #[test]
+    fn require_any_role_passes_when_user_has_all_allowed_roles() {
+        let auth = make_auth(&["Teacher", "AcademicStaff"]);
+        assert!(auth.require_any_role(&["Teacher", "AcademicStaff"]).is_ok());
+    }
+
+    // ── is_admin / is_teacher ─────────────────────────────────────────────
+
+    #[test]
+    fn is_admin_true_for_administrator_role() {
+        assert!(make_auth(&["Administrator"]).is_admin());
+    }
+
+    #[test]
+    fn is_admin_false_for_non_admin_roles() {
+        assert!(!make_auth(&["Teacher"]).is_admin());
+        assert!(!make_auth(&["Student"]).is_admin());
+        assert!(!make_auth(&["Parent"]).is_admin());
+        assert!(!make_auth(&[]).is_admin());
+    }
+
+    #[test]
+    fn is_teacher_true_for_teacher_role() {
+        assert!(make_auth(&["Teacher"]).is_teacher());
+    }
+
+    #[test]
+    fn is_teacher_false_for_non_teacher_roles() {
+        assert!(!make_auth(&["Administrator"]).is_teacher());
+        assert!(!make_auth(&["Student"]).is_teacher());
+        assert!(!make_auth(&[]).is_teacher());
+    }
+
+    #[test]
+    fn user_can_be_both_admin_and_teacher() {
+        let auth = make_auth(&["Administrator", "Teacher"]);
+        assert!(auth.is_admin());
+        assert!(auth.is_teacher());
+    }
+
+    // ── AuthenticatedUser field access ─────────────────────────────────────
+
+    #[test]
+    fn user_helper_returns_inner_struct() {
+        let auth = make_auth(&["Student"]);
+        assert_eq!(auth.user().username, "test_user");
+        assert_eq!(auth.user().account_state, "active");
+    }
+}
+
 /// Verify that a user has access to the given school.
 /// Super-admins pass. Scoped admins must have the school's campus in scope.
 /// Teachers/AcademicStaff must be in user_school_assignments.
