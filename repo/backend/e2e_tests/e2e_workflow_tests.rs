@@ -496,7 +496,7 @@ async fn test_config_value_update_appears_in_audit_log() {
     assert_eq!(resp.status(), 200, "admin config list must return 200");
 
     // Update the `log_retention_days` config value.
-    let req = TestRequest::patch()
+    let req = TestRequest::post()
         .uri("/api/v1/admin/config/values/log_retention_days")
         .insert_header(("Authorization", format!("Bearer {}", admin_token)))
         .set_json(serde_json::json!({ "value": "200" }))
@@ -514,7 +514,7 @@ async fn test_config_value_update_appears_in_audit_log() {
     let body: serde_json::Value = read_body_json(resp).await;
     let history = body.as_array().expect("history must be an array");
     assert!(
-        history.iter().any(|row| row["key"].as_str() == Some("log_retention_days")),
+        history.iter().any(|row| row["config_key"].as_str() == Some("log_retention_days")),
         "config history must include the recently updated key"
     );
 
@@ -526,14 +526,14 @@ async fn test_config_value_update_appears_in_audit_log() {
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200, "audit log endpoint must return 200");
     let body: serde_json::Value = read_body_json(resp).await;
-    let logs = body.as_array().expect("audit logs must be array");
+    let logs = body["rows"].as_array().expect("audit logs must be array");
     assert!(
         logs.iter().any(|entry| entry["action"].as_str() == Some("update_config")),
         "audit log must contain an update_config entry after config change"
     );
 
     // Restore the original value so other tests are not affected.
-    let req = TestRequest::patch()
+    let req = TestRequest::post()
         .uri("/api/v1/admin/config/values/log_retention_days")
         .insert_header(("Authorization", format!("Bearer {}", admin_token)))
         .set_json(serde_json::json!({ "value": "180" }))
@@ -571,7 +571,7 @@ async fn test_admin_user_state_management_affects_login() {
     let req = TestRequest::post()
         .uri(&format!("/api/v1/admin/users/{}/set-state", student_id))
         .insert_header(("Authorization", format!("Bearer {}", admin_token)))
-        .set_json(serde_json::json!({ "state": "suspended" }))
+        .set_json(serde_json::json!({ "state": "disabled" }))
         .to_request();
     let resp = call_service(&app, req).await;
     assert_eq!(resp.status(), 200, "admin set-state must return 200");
